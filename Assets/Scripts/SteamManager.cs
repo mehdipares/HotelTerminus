@@ -16,8 +16,16 @@ public class SteamManager : MonoBehaviour
     [SerializeField] private uint appId = 480;          // 480 = Spacewar (sandbox de test)
     [SerializeField] private int maxPlayers = 5;
 
-    public bool SteamReady { get; private set; }
+    /// <summary>
+    /// Etat reel du client Steam. On interroge SteamClient.IsValid a chaque fois plutot que
+    /// de garder un booleen : Steam peut mourir entre-temps (sortie du Play, rechargement de
+    /// scripts, seconde instance) et un flag fige provoquerait un NullReference.
+    /// </summary>
+    public bool SteamReady => initialized && SteamClient.IsValid;
+
     public Lobby? CurrentLobby { get; private set; }
+
+    private bool initialized;                            // true si Init() a reussi au moins une fois
 
     private FacepunchTransport facepunchTransport;       // null si on tourne sur un autre transport
     private string joinInput = "";                       // SteamId saisi a la main dans l'UI de test
@@ -40,13 +48,13 @@ public class SteamManager : MonoBehaviour
         {
             // asyncCallbacks = false : on pompe les callbacks nous-memes dans Update()
             SteamClient.Init(appId, false);
-            SteamReady = true;
+            initialized = true;
             Debug.Log($"[Steam] OK - {SteamClient.Name} ({SteamClient.SteamId})");
         }
         catch (Exception e)
         {
-            SteamReady = false;
-            Debug.LogError($"[Steam] Init impossible : {e.Message}");
+            initialized = false;
+            Debug.LogWarning($"[Steam] Init impossible : {e.Message}");
         }
     }
 
@@ -75,6 +83,18 @@ public class SteamManager : MonoBehaviour
             SteamClient.RunCallbacks();
     }
 
+    /// <summary>
+    /// Le nom Steam n'est lisible que si le client est valide : tout appel a SteamClient.Name
+    /// passe par ici pour ne jamais crasher l'UI.
+    /// </summary>
+    private string SteamStatusLine()
+    {
+        if (!SteamReady) return "Steam : non initialise";
+
+        try { return $"Steam : {SteamClient.Name} - {SteamClient.SteamId}"; }
+        catch { return "Steam : indisponible"; }
+    }
+
     private void OnDestroy()
     {
         if (Instance != this)
@@ -90,7 +110,11 @@ public class SteamManager : MonoBehaviour
 
     private void OnApplicationQuit()
     {
-        Disconnect();
+        // On se contente de quitter le lobby Steam. NGO eteint le NetworkManager dans son
+        // propre OnApplicationQuit : l'appeler nous aussi provoque un double Shutdown, et
+        // NetworkSceneManager.Dispose() part alors en NullReference.
+        CurrentLobby?.Leave();
+        CurrentLobby = null;
     }
 
     // ---------- API publique ----------
@@ -181,9 +205,7 @@ public class SteamManager : MonoBehaviour
         var nm = NetworkManager.Singleton;
 
         GUILayout.Label(UsingSteamTransport ? "Transport : Steam (Facepunch)" : "Transport : local");
-        GUILayout.Label(SteamReady
-            ? $"Steam : {SteamClient.Name} - {SteamClient.SteamId}"
-            : "Steam : non initialise");
+        GUILayout.Label(SteamStatusLine());
 
         if (nm != null && nm.IsListening)
         {
