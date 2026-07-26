@@ -11,6 +11,8 @@ using UnityEngine;
 public class TestItemSpawner : MonoBehaviour
 {
     [SerializeField] private GameObject itemPrefab;
+    [Tooltip("Deux exemplaires seront poses : un neuf et un grille, pour comparer les etats.")]
+    [SerializeField] private GameObject bulbPrefab;
     [SerializeField] private float spawnDistance = 2f;
     [SerializeField] private float spawnHeight = 0.5f;
 
@@ -60,13 +62,33 @@ public class TestItemSpawner : MonoBehaviour
             yield break;
         }
 
-        var position = player.transform.position
-                       + player.transform.forward * spawnDistance
-                       + Vector3.up * spawnHeight;
+        var origin = player.transform;
 
-        var instance = Instantiate(itemPrefab, position, Quaternion.identity);
+        SpawnAt(itemPrefab, origin, Vector3.zero);
+
+        // Deux ampoules cote a cote : une neuve a gauche, une grillee a droite, pour
+        // distinguer les deux etats d'un coup d'oeil.
+        SpawnAt(bulbPrefab, origin, origin.right * -0.6f);
+
+        var burnt = SpawnAt(bulbPrefab, origin, origin.right * 0.6f);
+        if (burnt != null && burnt.TryGetComponent<Bulb>(out var bulb))
+            bulb.ServerSetBurnt(true);
+
+        Debug.Log($"[Test] Objets poses devant le client {clientId}.");
+    }
+
+    private GameObject SpawnAt(GameObject prefab, Transform origin, Vector3 offset)
+    {
+        if (prefab == null) return null;
+
+        var position = origin.position
+                       + origin.forward * spawnDistance
+                       + Vector3.up * spawnHeight
+                       + offset;
+
+        var instance = Instantiate(prefab, position, Quaternion.identity);
         instance.GetComponent<NetworkObject>().Spawn();
 
-        Debug.Log($"[Test] Valise posee devant le client {clientId}.");
+        return instance;
     }
 }
