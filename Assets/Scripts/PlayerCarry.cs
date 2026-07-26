@@ -44,7 +44,12 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
 
     private InputSystem_Actions input;
     private CharacterController controller;
-    private Carryable aimTarget;                 // cible sous le viseur, reevaluee chaque frame
+
+    // Cible sous le viseur, reevaluee a chaque frame. On garde le NetworkObject a cote :
+    // c'est lui qu'on envoie au serveur, une interface ne se serialise pas.
+    private NetworkObject aimObject;
+    private bool aimCanInteract;                 // E : prendre / retirer
+    private bool aimCanUse;                      // clic gauche : visser / actionner
 
     // Ce que porte ce joueur. Ecrit par le serveur, lu par tous : un autre client peut ainsi
     // savoir si ce joueur a les mains prises (utile pour les animations plus tard).
@@ -57,6 +62,33 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
 
     /// <summary>Ancre vue par un Carryable : la main de ce joueur.</summary>
     public Transform Anchor => handAnchor;
+
+    /// <summary>Le joueur peut-il prendre quelque chose ? Une seule main pour l'instant.</summary>
+    public bool HasFreeHand => !heldItem.Value.TryGet(out _);
+
+    /// <summary>
+    /// Met un objet dans la main de ce joueur. Serveur uniquement.
+    /// Appele par les IInteractable — un Carryable ramasse au sol, une douille qui rend
+    /// son ampoule — plutot que par le joueur lui-meme.
+    /// </summary>
+    public void ServerTake(Carryable carryable)
+    {
+        if (!IsServer || carryable == null || carryable.NetworkObject == null) return;
+
+        carryable.ServerAttachTo(NetworkObject);
+        heldItem.Value = new NetworkObjectReference(carryable.NetworkObject);
+    }
+
+    /// <summary>
+    /// Oublie l'objet tenu sans le lacher physiquement : il part ailleurs, dans une douille
+    /// ou un support, qui prend le relais. Serveur uniquement.
+    /// </summary>
+    public void ServerReleaseHand()
+    {
+        if (!IsServer) return;
+
+        heldItem.Value = default;
+    }
 
     public bool TryGetHeld(out Carryable carryable)
     {
@@ -77,6 +109,7 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
 
         input = new InputSystem_Actions();
         input.Player.Interact.Enable();
+        input.Player.Attack.Enable();
     }
 
     public override void OnNetworkDespawn()
@@ -102,6 +135,7 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         if (input == null) return;
 
         input.Player.Interact.Disable();
+        input.Player.Attack.Disable();
         input.Dispose();
         input = null;
     }
@@ -111,11 +145,19 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         if (!IsOwner || input == null) return;
 
         // Visee evaluee a chaque frame : elle sert a l'interaction comme au point de visee.
-        aimTarget = FindAimTarget();
+        RefreshAim();
+
+        // Clic gauche : appliquer ce qu'on tient. Prioritaire sur le reste, sinon visser
+        // une ampoule reviendrait a la lacher par terre.
+        if (input.Player.Attack.WasPressedThisFrame() && aimObject != null && aimCanUse)
+        {
+            RequestUseServerRpc(new NetworkObjectReference(aimObject));
+            return;
+        }
 
         if (!input.Player.Interact.WasPressedThisFrame()) return;
 
-        // Mains pleines : E repose. Mains libres : E ramasse ce qu'on vise.
+        // Mains pleines : E repose. Mains libres : E declenche l'interaction visee.
         if (heldItem.Value.TryGet(out _))
         {
             // On transmet notre elan : lachee en pleine course, la valise doit glisser
@@ -125,28 +167,40 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
             return;
         }
 
-        if (aimTarget != null)
-            RequestPickupServerRpc(new NetworkObjectReference(aimTarget.NetworkObject), HandSlot.Right);
+        if (aimObject != null && aimCanInteract)
+            RequestInteractServerRpc(new NetworkObjectReference(aimObject));
     }
 
-    /// <summary>Cherche un Carryable disponible dans l'axe du regard, a portee de bras.</summary>
-    private Carryable FindAimTarget()
+    /// <summary>
+    /// Cherche un element interactif dans l'axe du regard, a portee de bras : une valise au
+    /// sol, une douille, et demain une porte ou un generateur.
+    /// </summary>
+    private void RefreshAim()
     {
+        aimObject = null;
+        aimCanInteract = false;
+        aimCanUse = false;
+
         var origin = aimSource != null ? aimSource : transform;
 
         if (!Physics.Raycast(origin.position, origin.forward, out var hit, reach,
                              interactMask, QueryTriggerInteraction.Ignore))
-            return null;
+            return;
 
         // GetComponentInParent : on touche presque toujours un morceau du mesh, pas la racine.
-        var carryable = hit.collider.GetComponentInParent<Carryable>();
+        var interactable = hit.collider.GetComponentInParent<IInteractable>();
+        if (interactable == null) return;
 
-        // IsAttached et non IsHeld : un objet visse dans une douille n'est pas a prendre
-        // directement, il faudra passer par la douille.
-        if (carryable == null || carryable.IsAttached || carryable.NetworkObject == null)
-            return null;
+        // L'interface ne se serialise pas : on doit retrouver le NetworkObject porteur pour
+        // pouvoir designer la cible au serveur.
+        if (interactable is not NetworkBehaviour behaviour || behaviour.NetworkObject == null)
+            return;
 
-        return carryable;
+        // Les deux actions sont evaluees separement : viser une douille vide avec une ampoule
+        // en main n'autorise pas E, mais autorise le clic gauche.
+        aimObject = behaviour.NetworkObject;
+        aimCanInteract = interactable.CanInteract(this);
+        aimCanUse = interactable.CanUse(this);
     }
 
     /// <summary>
@@ -158,7 +212,7 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
     {
         if (!IsOwner || !showCrosshair) return;
 
-        var onTarget = aimTarget != null || heldItem.Value.TryGet(out _);
+        var onTarget = aimCanInteract || aimCanUse || heldItem.Value.TryGet(out _);
         var size = onTarget ? crosshairSize * 1.75f : crosshairSize;
 
         var rect = new Rect(
@@ -175,23 +229,44 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
     // ---------- Requetes au serveur ----------
 
     [Rpc(SendTo.Server)]
-    private void RequestPickupServerRpc(NetworkObjectReference targetRef, HandSlot slot)
+    private void RequestInteractServerRpc(NetworkObjectReference targetRef)
     {
         // Rien de ce qui suit ne fait confiance au client : il a pu mentir, ou l'etat a pu
         // changer entre sa demande et son arrivee ici.
-        if (heldItem.Value.TryGet(out _)) return;              // mains deja prises
-        if (!targetRef.TryGet(out var targetObject)) return;   // objet disparu entre-temps
-
-        var carryable = targetObject.GetComponent<Carryable>();
-        if (carryable == null || carryable.IsHeld) return;     // quelqu'un a ete plus rapide
+        if (!targetRef.TryGet(out var targetObject)) return;   // cible disparue entre-temps
 
         // On verifie la distance, pas la visee : le serveur ne connait pas l'angle de la
         // camera du client (le pitch reste local), donc rejouer le raycast serait faux.
         if (Vector3.Distance(transform.position, targetObject.transform.position) > serverMaxDistance)
             return;
 
-        carryable.ServerAttachTo(NetworkObject);
-        heldItem.Value = new NetworkObjectReference(targetObject);
+        // GetComponent et non GetComponentInChildren : l'ampoule vissee est un enfant de la
+        // douille et implemente elle aussi IInteractable. On veut la cible designee, pas ce
+        // qu'elle contient.
+        var interactable = targetObject.GetComponent<IInteractable>();
+
+        // CanInteract est reevalue ici : entre la demande et son arrivee, un autre joueur a
+        // pu prendre l'objet ou vider la douille.
+        if (interactable == null || !interactable.CanInteract(this)) return;
+
+        interactable.ServerInteract(this);
+    }
+
+    [Rpc(SendTo.Server)]
+    private void RequestUseServerRpc(NetworkObjectReference targetRef)
+    {
+        if (!targetRef.TryGet(out var targetObject)) return;
+
+        if (Vector3.Distance(transform.position, targetObject.transform.position) > serverMaxDistance)
+            return;
+
+        var interactable = targetObject.GetComponent<IInteractable>();
+
+        // Reevalue ici : entre la demande et son arrivee, un autre joueur a pu visser une
+        // ampoule dans cette douille.
+        if (interactable == null || !interactable.CanUse(this)) return;
+
+        interactable.ServerUse(this);
     }
 
     [Rpc(SendTo.Server)]

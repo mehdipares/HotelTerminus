@@ -12,7 +12,7 @@ using UnityEngine;
 /// Autorite serveur : lui seul visse, devisse et decide de l'etat de la lumiere.
 /// </summary>
 [RequireComponent(typeof(NetworkObject))]
-public class BulbSocket : NetworkBehaviour, ICarryAnchor
+public class BulbSocket : NetworkBehaviour, ICarryAnchor, IInteractable
 {
     [Header("References")]
     [Tooltip("Ou l'ampoule vient se placer. Le point de prehension de l'ampoule s'aligne dessus.")]
@@ -42,11 +42,6 @@ public class BulbSocket : NetworkBehaviour, ICarryAnchor
     {
         installedBulb.OnValueChanged += OnInstalledChanged;
 
-        Debug.Log($"[Douille] {name} spawn reseau. IsServer={IsServer}, " +
-                  $"prefab={(startBulbPrefab != null ? startBulbPrefab.name : "AUCUN")}, " +
-                  $"anchor={(bulbAnchor != null ? bulbAnchor.name : "AUCUN")}, " +
-                  $"lamp={(lamp != null ? lamp.name : "AUCUNE")}");
-
         if (IsServer && startBulbPrefab != null)
             ServerSpawnStartBulb();
 
@@ -63,6 +58,63 @@ public class BulbSocket : NetworkBehaviour, ICarryAnchor
 
     private void OnInstalledChanged(NetworkObjectReference previous, NetworkObjectReference current)
         => RefreshTrackedBulb();
+
+    // ---------- Interaction ----------
+
+    /// <summary>
+    /// Aujourd'hui : retirer l'ampoule presente, si le joueur a les mains libres.
+    /// Le vissage d'une ampoule tenue en main viendra a l'etape suivante.
+    /// </summary>
+    public bool CanInteract(PlayerCarry player)
+    {
+        return HasBulb && player != null && player.HasFreeHand;
+    }
+
+    public void ServerInteract(PlayerCarry player)
+    {
+        if (!IsServer || player == null) return;
+
+        ServerReleaseBulbTo(player);
+    }
+
+    /// <summary>
+    /// Visser l'ampoule tenue en main, si la douille est vide et si l'ampoule est saine.
+    /// On refuse une ampoule grillee : la remplacer par une autre ampoule morte n'a aucun
+    /// sens, et le refus se lit tout de suite puisque rien ne s'allume.
+    /// </summary>
+    public bool CanUse(PlayerCarry player)
+    {
+        if (HasBulb || player == null) return false;
+        if (!player.TryGetHeld(out var carried)) return false;
+
+        return carried.TryGetComponent<Bulb>(out var bulb) && !bulb.IsBurnt;
+    }
+
+    public void ServerUse(PlayerCarry player)
+    {
+        if (!IsServer || !CanUse(player)) return;
+        if (!player.TryGetHeld(out var carried)) return;
+
+        // La main se vide d'abord : l'objet passe de la main au receptacle sans jamais
+        // etre libre entre les deux, sinon il tomberait le temps d'une frame.
+        player.ServerReleaseHand();
+        carried.ServerAttachToSocket(NetworkObject);
+
+        installedBulb.Value = new NetworkObjectReference(carried.NetworkObject);
+    }
+
+    /// <summary>
+    /// Devisse l'ampoule et la met dans la main du joueur. La douille se vide, donc
+    /// <see cref="RefreshTrackedBulb"/> eteint la lumiere sans qu'on ait a s'en occuper.
+    /// </summary>
+    private void ServerReleaseBulbTo(PlayerCarry player)
+    {
+        if (!installedBulb.Value.TryGet(out var netObject) || netObject == null) return;
+        if (!netObject.TryGetComponent<Carryable>(out var carryable)) return;
+
+        installedBulb.Value = default;
+        player.ServerTake(carryable);
+    }
 
     // ---------- Serveur ----------
 
@@ -89,9 +141,6 @@ public class BulbSocket : NetworkBehaviour, ICarryAnchor
             carryable.ServerAttachToSocket(NetworkObject);
 
         installedBulb.Value = new NetworkObjectReference(netObject);
-
-        Debug.Log($"[Douille] Ampoule vissee dans {name} en {instance.transform.position}, " +
-                  $"echelle {instance.transform.lossyScale}.");
     }
 
     // ---------- Etat local, deduit du serveur ----------

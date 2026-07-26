@@ -12,7 +12,7 @@ using UnityEngine;
 /// </summary>
 [RequireComponent(typeof(NetworkObject))]
 [RequireComponent(typeof(Rigidbody))]
-public class Carryable : NetworkBehaviour
+public class Carryable : NetworkBehaviour, IInteractable
 {
     /// <summary>Valeur de <see cref="holder"/> quand personne ne porte l'objet.</summary>
     public const ulong NoHolder = ulong.MaxValue;
@@ -37,6 +37,10 @@ public class Carryable : NetworkBehaviour
     [SerializeField] private float carrierVelocityTransfer = 0.9f;
     [Tooltip("Rotation donnee au lacher : sans elle, l'objet reste plante bien droit.")]
     [SerializeField] private float dropSpin = 1.5f;
+    [Tooltip("Vitesse maximale au lacher. Laisse passer l'elan du sprint — jeter un objet en " +
+             "courant fait partie du jeu — sans l'expedier a l'autre bout du couloir. " +
+             "A regler par objet : une ampoule de 200 g part bien plus loin qu'une valise.")]
+    [SerializeField] private float maxDropSpeed = 5.5f;
 
     // Lisible par tous, ecrivable par le serveur uniquement : la regle du projet.
     private readonly NetworkVariable<ulong> holder = new(
@@ -106,6 +110,21 @@ public class Carryable : NetworkBehaviour
     private void OnSocketChanged(NetworkObjectReference previous, NetworkObjectReference current)
         => ApplyAttachment();
 
+    // ---------- Interaction ----------
+
+    /// <summary>Ramassable si libre et si le joueur a une main disponible.</summary>
+    public bool CanInteract(PlayerCarry player)
+    {
+        return !IsAttached && player != null && player.HasFreeHand;
+    }
+
+    public void ServerInteract(PlayerCarry player)
+    {
+        if (!IsServer || player == null) return;
+
+        player.ServerTake(this);
+    }
+
     // ---------- Ordres serveur ----------
 
     /// <summary>
@@ -153,10 +172,15 @@ public class Carryable : NetworkBehaviour
 
         if (dropOrigin == null) return;
 
+        // Direction horizontale : le forward de la camera contient l'angle de vue vertical.
+        // Lacher un objet en regardant le plafond l'expedierait a l'etage du dessus.
+        var forward = Vector3.ProjectOnPlane(dropOrigin.forward, Vector3.up);
+        forward = forward.sqrMagnitude > 0.001f ? forward.normalized : dropOrigin.right;
+
         // On repose l'objet devant le joueur plutot qu'a l'endroit exact de la main :
         // sinon il naitrait dans sa capsule de collision et serait ejecte n'importe ou.
         var target = dropOrigin.position
-                     + dropOrigin.forward * dropForwardOffset
+                     + forward * dropForwardOffset
                      + Vector3.up * dropUpOffset;
 
         transform.position += target - Grip.position;
@@ -164,9 +188,12 @@ public class Carryable : NetworkBehaviour
         // On ne redresse pas l'objet : il garde l'inclinaison qu'il avait en main et finit
         // de basculer tout seul. Reposer une valise parfaitement d'aplomb la laisse plantee
         // comme un piquet, ce qui trahit immediatement le code derriere.
-        body.linearVelocity = carrierVelocity * carrierVelocityTransfer
-                              + dropOrigin.forward * dropImpulse;
+        var velocity = carrierVelocity * carrierVelocityTransfer + forward * dropImpulse;
 
+        // Aucune composante ascendante : on pose ou on laisse tomber, on ne lance jamais.
+        velocity.y = Mathf.Min(velocity.y, 0f);
+
+        body.linearVelocity = Vector3.ClampMagnitude(velocity, maxDropSpeed);
         body.angularVelocity = UnityEngine.Random.insideUnitSphere * dropSpin;
     }
 

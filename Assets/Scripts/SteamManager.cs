@@ -37,12 +37,18 @@ public class SteamManager : MonoBehaviour
     {
         if (Instance != null && Instance != this)
         {
-            Destroy(gameObject);
+            // On ne detruit que ce composant, jamais le GameObject : il porte aussi le
+            // NetworkManager, et le supprimer couperait la partie en cours.
+            Destroy(this);
             return;
         }
 
         Instance = this;
-        DontDestroyOnLoad(gameObject);
+
+        // Pas de DontDestroyOnLoad ici : NGO gere deja la persistance du GameObject qui
+        // porte le NetworkManager. Deux systemes qui pilotent le meme cycle de vie donnent
+        // un ordre de destruction imprevisible, et NGO plante alors dans
+        // OnNetworkBehaviourDestroyed sur un NetworkManagerOwner devenu null.
 
         try
         {
