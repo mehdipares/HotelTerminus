@@ -13,7 +13,7 @@ using UnityEngine.InputSystem;
 /// deuxieme main n'oblige pas a changer la signature ni le protocole reseau.
 /// </summary>
 [RequireComponent(typeof(NetworkObject))]
-public class PlayerCarry : NetworkBehaviour
+public class PlayerCarry : NetworkBehaviour, ICarryAnchor
 {
     public enum HandSlot
     {
@@ -36,8 +36,15 @@ public class PlayerCarry : NetworkBehaviour
     [Tooltip("Plafond applique a l'elan transmis a l'objet lache.")]
     [SerializeField] private float maxCarrierSpeed = 8f;
 
+    [Header("Point de visee")]
+    [SerializeField] private bool showCrosshair = true;
+    [SerializeField] private float crosshairSize = 4f;
+    [SerializeField] private Color crosshairIdle = new(1f, 1f, 1f, 0.5f);
+    [SerializeField] private Color crosshairOnTarget = new(0.4f, 1f, 0.5f, 0.95f);
+
     private InputSystem_Actions input;
     private CharacterController controller;
+    private Carryable aimTarget;                 // cible sous le viseur, reevaluee chaque frame
 
     // Ce que porte ce joueur. Ecrit par le serveur, lu par tous : un autre client peut ainsi
     // savoir si ce joueur a les mains prises (utile pour les animations plus tard).
@@ -47,6 +54,9 @@ public class PlayerCarry : NetworkBehaviour
         NetworkVariableWritePermission.Server);
 
     public Transform HandAnchor => handAnchor;
+
+    /// <summary>Ancre vue par un Carryable : la main de ce joueur.</summary>
+    public Transform Anchor => handAnchor;
 
     public bool TryGetHeld(out Carryable carryable)
     {
@@ -78,7 +88,14 @@ public class PlayerCarry : NetworkBehaviour
             carried.ServerDetach(transform);
     }
 
-    private void OnDestroy() => ReleaseInput();
+    // override, pas une nouvelle methode : NetworkBehaviour.OnDestroy() desenregistre le
+    // composant aupres de son NetworkObject. Le masquer laisse NGO avec des references
+    // mortes, d'ou des NullReference a la fermeture.
+    public override void OnDestroy()
+    {
+        ReleaseInput();
+        base.OnDestroy();
+    }
 
     private void ReleaseInput()
     {
@@ -92,6 +109,10 @@ public class PlayerCarry : NetworkBehaviour
     private void Update()
     {
         if (!IsOwner || input == null) return;
+
+        // Visee evaluee a chaque frame : elle sert a l'interaction comme au point de visee.
+        aimTarget = FindAimTarget();
+
         if (!input.Player.Interact.WasPressedThisFrame()) return;
 
         // Mains pleines : E repose. Mains libres : E ramasse ce qu'on vise.
@@ -104,28 +125,51 @@ public class PlayerCarry : NetworkBehaviour
             return;
         }
 
-        if (TryAim(out var target))
-            RequestPickupServerRpc(new NetworkObjectReference(target), HandSlot.Right);
+        if (aimTarget != null)
+            RequestPickupServerRpc(new NetworkObjectReference(aimTarget.NetworkObject), HandSlot.Right);
     }
 
-    /// <summary>Cherche un Carryable dans l'axe du regard, a portee de bras.</summary>
-    private bool TryAim(out NetworkObject target)
+    /// <summary>Cherche un Carryable disponible dans l'axe du regard, a portee de bras.</summary>
+    private Carryable FindAimTarget()
     {
-        target = null;
-
         var origin = aimSource != null ? aimSource : transform;
 
         if (!Physics.Raycast(origin.position, origin.forward, out var hit, reach,
                              interactMask, QueryTriggerInteraction.Ignore))
-            return false;
+            return null;
 
         // GetComponentInParent : on touche presque toujours un morceau du mesh, pas la racine.
         var carryable = hit.collider.GetComponentInParent<Carryable>();
-        if (carryable == null || carryable.IsHeld)
-            return false;
 
-        target = carryable.NetworkObject;
-        return target != null;
+        // IsAttached et non IsHeld : un objet visse dans une douille n'est pas a prendre
+        // directement, il faudra passer par la douille.
+        if (carryable == null || carryable.IsAttached || carryable.NetworkObject == null)
+            return null;
+
+        return carryable;
+    }
+
+    /// <summary>
+    /// Point de visee minimaliste, en IMGUI comme le reste de l'interface provisoire.
+    /// Il change de couleur quand une cible est atteignable : sans ce retour, on ne sait
+    /// pas si on rate l'objet ou si l'action a echoue.
+    /// </summary>
+    private void OnGUI()
+    {
+        if (!IsOwner || !showCrosshair) return;
+
+        var onTarget = aimTarget != null || heldItem.Value.TryGet(out _);
+        var size = onTarget ? crosshairSize * 1.75f : crosshairSize;
+
+        var rect = new Rect(
+            (Screen.width - size) * 0.5f,
+            (Screen.height - size) * 0.5f,
+            size, size);
+
+        var previous = GUI.color;
+        GUI.color = onTarget ? crosshairOnTarget : crosshairIdle;
+        GUI.DrawTexture(rect, Texture2D.whiteTexture);
+        GUI.color = previous;
     }
 
     // ---------- Requetes au serveur ----------

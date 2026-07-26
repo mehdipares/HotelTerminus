@@ -44,15 +44,29 @@ public class Carryable : NetworkBehaviour
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server);
 
+    // Receptacle dans lequel l'objet est pose (une douille aujourd'hui). Distinct de holder :
+    // un objet visse n'est tenu par personne, mais il n'est pas libre pour autant.
+    private readonly NetworkVariable<NetworkObjectReference> socket = new(
+        default,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+
     private Rigidbody body;
     private Collider[] colliders;
     private NetworkTransform netTransform;
-    private Transform anchor;                    // main du porteur, resolue localement
+    private Transform anchor;                    // main ou receptacle, resolu localement
+    private Vector3 baseScale;                   // taille reelle voulue, quelle que soit l'ancre
 
     public bool IsHeld => holder.Value != NoHolder;
     public ulong HolderClientId => holder.Value;
     public string ItemId => itemId;
     public Transform Grip => gripPoint != null ? gripPoint : transform;
+
+    /// <summary>Pose dans un receptacle (douille, support). Ni libre, ni dans une main.</summary>
+    public bool IsSocketed => socket.Value.TryGet(out var target) && target != null;
+
+    /// <summary>Vrai des que l'objet est rattache a quelque chose : main ou receptacle.</summary>
+    public bool IsAttached => IsHeld || IsSocketed;
 
     // TODO satisfaction client : c'est ici que viendra le comptage des mauvais traitements
     // (OnCollisionEnter cote serveur, au-dela d'un seuil d'impulsion). La DeliveryZone
@@ -64,23 +78,33 @@ public class Carryable : NetworkBehaviour
         body = GetComponent<Rigidbody>();
         colliders = GetComponentsInChildren<Collider>(true);
         netTransform = GetComponent<NetworkTransform>();
+
+        // Taille reelle de l'objet, capturee avant tout parentage : elle sert de reference
+        // pour ne pas se laisser deformer par l'echelle d'un porteur ou d'un receptacle.
+        baseScale = transform.localScale;
     }
 
     public override void OnNetworkSpawn()
     {
         holder.OnValueChanged += OnHolderChanged;
+        socket.OnValueChanged += OnSocketChanged;
 
-        // Un client qui rejoint en cours de partie doit retrouver l'objet dans les mains
-        // de celui qui le porte : on applique l'etat courant, pas seulement les changements.
-        ApplyHolder(holder.Value);
+        // Un client qui rejoint en cours de partie doit retrouver l'objet la ou il est :
+        // dans une main, visse dans une douille, ou par terre. On applique l'etat courant,
+        // pas seulement les changements a venir.
+        ApplyAttachment();
     }
 
     public override void OnNetworkDespawn()
     {
         holder.OnValueChanged -= OnHolderChanged;
+        socket.OnValueChanged -= OnSocketChanged;
     }
 
-    private void OnHolderChanged(ulong previous, ulong current) => ApplyHolder(current);
+    private void OnHolderChanged(ulong previous, ulong current) => ApplyAttachment();
+
+    private void OnSocketChanged(NetworkObjectReference previous, NetworkObjectReference current)
+        => ApplyAttachment();
 
     // ---------- Ordres serveur ----------
 
@@ -95,7 +119,23 @@ public class Carryable : NetworkBehaviour
         // Le parentage passe par NGO : la hierarchie est repliquee a tous les clients,
         // l'objet suit donc le joueur sans qu'on envoie une position par frame.
         NetworkObject.TrySetParent(carrier, false);
+        socket.Value = default;                  // on quitte le receptacle s'il y en avait un
         holder.Value = carrier.OwnerClientId;
+    }
+
+    /// <summary>
+    /// Pose l'objet dans un receptacle (une douille) plutot que dans une main.
+    /// L'objet n'est tenu par personne mais reste indisponible : ses colliders sont coupes,
+    /// donc on ne peut pas le ramasser en le visant — l'interaction passe par le receptacle.
+    /// Serveur uniquement.
+    /// </summary>
+    public void ServerAttachToSocket(NetworkObject receptacle)
+    {
+        if (!IsServer || receptacle == null) return;
+
+        NetworkObject.TrySetParent(receptacle, false);
+        holder.Value = NoHolder;
+        socket.Value = new NetworkObjectReference(receptacle);
     }
 
     /// <summary>
@@ -109,6 +149,7 @@ public class Carryable : NetworkBehaviour
 
         NetworkObject.TryRemoveParent(true);
         holder.Value = NoHolder;
+        socket.Value = default;
 
         if (dropOrigin == null) return;
 
@@ -131,41 +172,84 @@ public class Carryable : NetworkBehaviour
 
     // ---------- Etat local, deduit du serveur ----------
 
-    private void ApplyHolder(ulong holderId)
+    private void ApplyAttachment()
     {
-        var held = holderId != NoHolder;
+        anchor = ResolveAnchor();
 
-        anchor = held ? ResolveAnchor(holderId) : null;
+        var attached = anchor != null;
 
-        // Colliders coupes : sinon l'objet porte percute son propre porteur.
+        // Colliders coupes : un objet tenu ne doit pas percuter son porteur, et un objet
+        // visse ne doit pas etre ramassable en le visant — on passe par la douille.
         foreach (var col in colliders)
-            col.enabled = !held;
+            col.enabled = !attached;
 
-        body.isKinematic = held;
+        body.isKinematic = attached;
 
-        // Pendant le port, la position se deduit du porteur chez chaque client. Repliquer
-        // en plus serait du trafic inutile, et les deux se marcheraient dessus.
+        // Tant que l'objet est rattache, sa position se deduit de son ancre chez chaque
+        // client. La repliquer en plus serait du trafic inutile, et les deux se
+        // marcheraient dessus.
         if (netTransform != null)
-            netTransform.enabled = !held;
+            netTransform.enabled = !attached;
 
-        if (held)
+        RestoreScale();
+
+        if (attached)
             SnapToAnchor();
     }
 
-    private Transform ResolveAnchor(ulong holderId)
+    /// <summary>
+    /// Annule l'echelle du parent pour que l'objet garde sa taille reelle.
+    /// Sans ca, une ampoule a l'echelle 0.001 vissee dans une douille a l'echelle 0.1
+    /// se retrouve mille fois trop petite — et une echelle non uniforme l'ecraserait.
+    /// </summary>
+    private void RestoreScale()
     {
-        var playerObject = NetworkManager.SpawnManager.GetPlayerNetworkObject(holderId);
-        if (playerObject == null) return null;
+        var parent = transform.parent;
 
-        var carry = playerObject.GetComponent<PlayerCarry>();
-        return carry != null ? carry.HandAnchor : playerObject.transform;
+        if (parent == null)
+        {
+            transform.localScale = baseScale;
+            return;
+        }
+
+        var parentScale = parent.lossyScale;
+
+        transform.localScale = new Vector3(
+            Mathf.Approximately(parentScale.x, 0f) ? baseScale.x : baseScale.x / parentScale.x,
+            Mathf.Approximately(parentScale.y, 0f) ? baseScale.y : baseScale.y / parentScale.y,
+            Mathf.Approximately(parentScale.z, 0f) ? baseScale.z : baseScale.z / parentScale.z);
+    }
+
+    /// <summary>
+    /// Retrouve l'ancre courante : la main du porteur, ou le receptacle dans lequel l'objet
+    /// est pose. Le Carryable ne sait pas lequel des deux le tient, il suit un ICarryAnchor.
+    /// </summary>
+    private Transform ResolveAnchor()
+    {
+        if (holder.Value != NoHolder)
+        {
+            var playerObject = NetworkManager.SpawnManager.GetPlayerNetworkObject(holder.Value);
+            return playerObject != null ? AnchorOf(playerObject.gameObject) : null;
+        }
+
+        if (socket.Value.TryGet(out var receptacle) && receptacle != null)
+            return AnchorOf(receptacle.gameObject);
+
+        return null;
+    }
+
+    private static Transform AnchorOf(GameObject source)
+    {
+        return source.TryGetComponent<ICarryAnchor>(out var provider) && provider.Anchor != null
+            ? provider.Anchor
+            : source.transform;
     }
 
     private void LateUpdate()
     {
         // LateUpdate : la camera et le joueur ont fini de bouger, l'objet ne traine donc
         // pas d'une frame derriere la main.
-        if (IsHeld && anchor != null)
+        if (anchor != null)
             SnapToAnchor();
     }
 

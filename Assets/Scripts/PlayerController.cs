@@ -167,9 +167,13 @@ public class PlayerController : NetworkBehaviour
         ReleaseInput();
     }
 
-    private void OnDestroy()
+    // override, pas une nouvelle methode : NetworkBehaviour.OnDestroy() desenregistre le
+    // composant aupres de son NetworkObject. Le masquer laisse NGO avec des references
+    // mortes, d'ou des NullReference a la fermeture.
+    public override void OnDestroy()
     {
         ReleaseInput();
+        base.OnDestroy();
     }
 
     private void ReleaseInput()
