@@ -87,11 +87,11 @@ public class DeliveryZone : NetworkBehaviour
 
     private bool Accepts(Carryable carryable)
     {
-        // Objet porte : le joueur ne fait que traverser la chambre avec la valise en main.
-        // Aujourd'hui ce cas ne peut pas arriver — porter un objet desactive ses colliders,
-        // donc il ne declenche aucun trigger. On garde le test pour que la regle metier
-        // reste ecrite, meme si la gestion des colliders change un jour.
-        if (carryable.IsHeld) return false;
+        // Objet rattache — tenu en main ou pose dans un receptacle : ce n'est pas une
+        // livraison. Aujourd'hui ce cas ne peut pas arriver, car un objet rattache a ses
+        // colliders coupes et ne declenche aucun trigger. On garde le test pour que la
+        // regle metier reste ecrite, meme si la gestion des colliders change un jour.
+        if (carryable.IsAttached) return false;
 
         if (!string.IsNullOrEmpty(acceptedItemId) && carryable.ItemId != acceptedItemId)
             return false;

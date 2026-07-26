@@ -7,16 +7,14 @@ using UnityEngine;
 /// generateur ensuite. Rien ici n'est specifique a la valise.
 ///
 /// Autorite serveur stricte : lui seul attache, detache et simule la physique.
-/// <see cref="holder"/> est la source de verite unique ; chaque client en deduit son etat
-/// local (colliders, physique, position dans la main) sans jamais decider quoi que ce soit.
+/// <see cref="attachedTo"/> est la source de verite unique ; chaque client en deduit son
+/// etat local (colliders, physique, position dans la main) sans jamais decider quoi que ce
+/// soit.
 /// </summary>
 [RequireComponent(typeof(NetworkObject))]
 [RequireComponent(typeof(Rigidbody))]
 public class Carryable : NetworkBehaviour, IInteractable
 {
-    /// <summary>Valeur de <see cref="holder"/> quand personne ne porte l'objet.</summary>
-    public const ulong NoHolder = ulong.MaxValue;
-
     [Tooltip("Point par lequel l'objet est tenu : il vient se coller sur la main du porteur. " +
              "Vide = l'origine de l'objet. Sur la valise, c'est la poignee.")]
     [SerializeField] private Transform gripPoint;
@@ -42,15 +40,15 @@ public class Carryable : NetworkBehaviour, IInteractable
              "A regler par objet : une ampoule de 200 g part bien plus loin qu'une valise.")]
     [SerializeField] private float maxDropSpeed = 5.5f;
 
+    // Ce a quoi l'objet est rattache : la main d'un joueur ou un receptacle. Les deux cas
+    // partagent la meme variable parce que les deux implementent ICarryAnchor.
+    //
+    // On reference le NetworkObject et non un clientId : dans NGO, un client ne peut pas
+    // retrouver l'avatar d'un *autre* joueur a partir de son identifiant. Passer par le
+    // clientId rendait les objets portes invisibles pour tout le monde sauf leur porteur.
+    //
     // Lisible par tous, ecrivable par le serveur uniquement : la regle du projet.
-    private readonly NetworkVariable<ulong> holder = new(
-        NoHolder,
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server);
-
-    // Receptacle dans lequel l'objet est pose (une douille aujourd'hui). Distinct de holder :
-    // un objet visse n'est tenu par personne, mais il n'est pas libre pour autant.
-    private readonly NetworkVariable<NetworkObjectReference> socket = new(
+    private readonly NetworkVariable<NetworkObjectReference> attachedTo = new(
         default,
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server);
@@ -61,16 +59,29 @@ public class Carryable : NetworkBehaviour, IInteractable
     private Transform anchor;                    // main ou receptacle, resolu localement
     private Vector3 baseScale;                   // taille reelle voulue, quelle que soit l'ancre
 
-    public bool IsHeld => holder.Value != NoHolder;
-    public ulong HolderClientId => holder.Value;
     public string ItemId => itemId;
     public Transform Grip => gripPoint != null ? gripPoint : transform;
 
-    /// <summary>Pose dans un receptacle (douille, support). Ni libre, ni dans une main.</summary>
-    public bool IsSocketed => socket.Value.TryGet(out var target) && target != null;
-
     /// <summary>Vrai des que l'objet est rattache a quelque chose : main ou receptacle.</summary>
-    public bool IsAttached => IsHeld || IsSocketed;
+    public bool IsAttached => TryGetAttachment(out _);
+
+    /// <summary>Tenu par un joueur (par opposition a pose dans un receptacle).</summary>
+    public bool IsHeld => TryGetAttachment(out var target)
+                          && target.GetComponent<PlayerCarry>() != null;
+
+    /// <summary>Pose dans un receptacle (douille, support). Ni libre, ni dans une main.</summary>
+    public bool IsSocketed => IsAttached && !IsHeld;
+
+    private bool TryGetAttachment(out NetworkObject target)
+    {
+        target = null;
+
+        // TryGet passe par le NetworkManager pour resoudre l'identifiant : hors partie —
+        // avant le spawn ou apres l'arret — il n'existe plus et l'appel leve.
+        if (!IsSpawned || NetworkManager == null) return false;
+
+        return attachedTo.Value.TryGet(out target) && target != null;
+    }
 
     // TODO satisfaction client : c'est ici que viendra le comptage des mauvais traitements
     // (OnCollisionEnter cote serveur, au-dela d'un seuil d'impulsion). La DeliveryZone
@@ -90,8 +101,7 @@ public class Carryable : NetworkBehaviour, IInteractable
 
     public override void OnNetworkSpawn()
     {
-        holder.OnValueChanged += OnHolderChanged;
-        socket.OnValueChanged += OnSocketChanged;
+        attachedTo.OnValueChanged += OnAttachmentChanged;
 
         // Un client qui rejoint en cours de partie doit retrouver l'objet la ou il est :
         // dans une main, visse dans une douille, ou par terre. On applique l'etat courant,
@@ -101,13 +111,10 @@ public class Carryable : NetworkBehaviour, IInteractable
 
     public override void OnNetworkDespawn()
     {
-        holder.OnValueChanged -= OnHolderChanged;
-        socket.OnValueChanged -= OnSocketChanged;
+        attachedTo.OnValueChanged -= OnAttachmentChanged;
     }
 
-    private void OnHolderChanged(ulong previous, ulong current) => ApplyAttachment();
-
-    private void OnSocketChanged(NetworkObjectReference previous, NetworkObjectReference current)
+    private void OnAttachmentChanged(NetworkObjectReference previous, NetworkObjectReference current)
         => ApplyAttachment();
 
     // ---------- Interaction ----------
@@ -138,8 +145,7 @@ public class Carryable : NetworkBehaviour, IInteractable
         // Le parentage passe par NGO : la hierarchie est repliquee a tous les clients,
         // l'objet suit donc le joueur sans qu'on envoie une position par frame.
         NetworkObject.TrySetParent(carrier, false);
-        socket.Value = default;                  // on quitte le receptacle s'il y en avait un
-        holder.Value = carrier.OwnerClientId;
+        attachedTo.Value = new NetworkObjectReference(carrier);
     }
 
     /// <summary>
@@ -153,8 +159,7 @@ public class Carryable : NetworkBehaviour, IInteractable
         if (!IsServer || receptacle == null) return;
 
         NetworkObject.TrySetParent(receptacle, false);
-        holder.Value = NoHolder;
-        socket.Value = new NetworkObjectReference(receptacle);
+        attachedTo.Value = new NetworkObjectReference(receptacle);
     }
 
     /// <summary>
@@ -167,8 +172,7 @@ public class Carryable : NetworkBehaviour, IInteractable
         if (!IsServer) return;
 
         NetworkObject.TryRemoveParent(true);
-        holder.Value = NoHolder;
-        socket.Value = default;
+        attachedTo.Value = default;
 
         if (dropOrigin == null) return;
 
@@ -201,9 +205,12 @@ public class Carryable : NetworkBehaviour, IInteractable
 
     private void ApplyAttachment()
     {
-        anchor = ResolveAnchor();
+        // L'etat repliqué fait foi, pas la resolution de l'ancre : chez un client qui
+        // rejoint, l'objet porte arrive parfois avant l'avatar de son porteur. Deduire
+        // "libre" d'une ancre introuvable rendrait l'objet physique chez lui seul.
+        var attached = IsAttached;
 
-        var attached = anchor != null;
+        anchor = attached ? ResolveAnchor() : null;
 
         // Colliders coupes : un objet tenu ne doit pas percuter son porteur, et un objet
         // visse ne doit pas etre ramassable en le visant — on passe par la douille.
@@ -253,16 +260,7 @@ public class Carryable : NetworkBehaviour, IInteractable
     /// </summary>
     private Transform ResolveAnchor()
     {
-        if (holder.Value != NoHolder)
-        {
-            var playerObject = NetworkManager.SpawnManager.GetPlayerNetworkObject(holder.Value);
-            return playerObject != null ? AnchorOf(playerObject.gameObject) : null;
-        }
-
-        if (socket.Value.TryGet(out var receptacle) && receptacle != null)
-            return AnchorOf(receptacle.gameObject);
-
-        return null;
+        return TryGetAttachment(out var target) ? AnchorOf(target.gameObject) : null;
     }
 
     private static Transform AnchorOf(GameObject source)
@@ -274,6 +272,17 @@ public class Carryable : NetworkBehaviour, IInteractable
 
     private void LateUpdate()
     {
+        // Resolution differee : si le porteur n'existait pas encore au moment ou l'etat est
+        // arrive, on retente jusqu'a le trouver. C'est le cas d'un joueur qui rejoint une
+        // partie ou quelqu'un tient deja un objet.
+        if (anchor == null && IsAttached)
+        {
+            anchor = ResolveAnchor();
+
+            if (anchor != null)
+                RestoreScale();
+        }
+
         // LateUpdate : la camera et le joueur ont fini de bouger, l'objet ne traine donc
         // pas d'une frame derriere la main.
         if (anchor != null)

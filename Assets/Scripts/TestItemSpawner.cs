@@ -16,11 +16,12 @@ public class TestItemSpawner : MonoBehaviour
     [SerializeField] private float spawnDistance = 2f;
     [SerializeField] private float spawnHeight = 0.5f;
 
+    private bool alreadySpawned;
+
     private void Start()
     {
         if (NetworkManager.Singleton == null) return;
 
-        // L'hote passe aussi par ce callback : une valise apparait donc devant lui aussi.
         NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
     }
 
@@ -36,6 +37,12 @@ public class TestItemSpawner : MonoBehaviour
         // que personne d'autre ne verrait.
         if (!NetworkManager.Singleton.IsServer) return;
 
+        // Une seule fournee pour toute la partie, posee devant l'hote. Sans ce garde-fou,
+        // chaque joueur qui rejoint ajoutait sa propre valise et ses deux ampoules — et le
+        // callback se declenche meme deux fois pour l'hote.
+        if (alreadySpawned) return;
+
+        alreadySpawned = true;
         StartCoroutine(SpawnForClient(clientId));
     }
 

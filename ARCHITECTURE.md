@@ -35,6 +35,21 @@ divergeraient.
 `isKinematic` dans du code client pour savoir si un objet est manipulable **ne marche pas**.
 Ce test appartient au serveur.
 
+### Référencer un joueur : NetworkObject, jamais clientId
+
+Pour désigner un joueur dans un état répliqué, on stocke une `NetworkObjectReference`, pas
+un `clientId`.
+
+`NetworkSpawnManager.GetPlayerNetworkObject(clientId)` **retourne null chez un client dès
+qu'on lui demande l'avatar d'un autre joueur** — c'est une restriction volontaire de NGO en
+mode client-serveur. Un objet porté référencé par `clientId` devient donc invisible pour
+tout le monde sauf son porteur, alors que le code paraît correct et que le serveur, lui,
+fonctionne.
+
+Une `NetworkObjectReference` se résout chez tout le monde. Elle a un autre avantage : la
+main d'un joueur et un réceptacle (douille, support) deviennent le même cas — les deux
+exposent une ancre, l'objet attaché n'a pas à savoir lequel des deux le tient.
+
 ### Le client demande, le serveur décide
 
 Aucune logique locale ne modifie un état visible par les autres. Le schéma est toujours :
