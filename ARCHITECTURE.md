@@ -101,6 +101,30 @@ Quand un repli est nécessaire, il faut que la panne reste **visible** : ici le 
 côtés. Une coupure loggée chez un client dont la lumière ne bouge pas désigne immédiatement
 le coupable.
 
+### Une action maintenue à plusieurs se compte sur le serveur
+
+Le générateur se relance en maintenant E, et plusieurs joueurs peuvent s'y mettre ensemble.
+Ça exclut de faire compter le temps par le client : deux joueurs tiendraient chacun leur
+propre chronomètre, alors qu'ils poussent **une seule** jauge.
+
+Le serveur tient donc la liste des joueurs en cours de réparation et fait avancer une
+`NetworkVariable<float>`. Le client n'envoie que deux messages, *je commence* et *j'arrête*.
+
+Bénéfice qui n'était pas cherché : la jauge étant répliquée, on **voit son collègue réparer**
+sans le toucher. C'est exactement le genre de lisibilité qui fait vivre une mécanique de
+coopération.
+
+Le partage du travail est plafonné (`Max Helpers`, 2 par défaut). Sans plafond, la mécanique
+dirait « attroupez-vous » au lieu de « va chercher quelqu'un ».
+
+`IInteractable` porte ça avec des membres à implémentation par défaut — `IsHeldInteraction`,
+`HoldProgress`, `ServerHoldBegin/End` — donc les objets à pression instantanée n'ont rien à
+écrire. Même procédé que `CanUse` lors de l'ajout du vissage.
+
+**Ce que le serveur vérifie lui-même :** la distance, qui vient des positions répliquées, et
+la déconnexion. Il ne sait pas où le joueur regarde — le pitch caméra reste local — donc
+c'est le client qui signale qu'il ne vise plus.
+
 ### Même une touche de debug passe par le serveur
 
 `U` bascule le courant depuis n'importe quel joueur, mais un client envoie un

@@ -50,6 +50,16 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
     private NetworkObject aimObject;
     private bool aimCanInteract;                 // E : prendre / retirer
     private bool aimCanUse;                      // clic gauche : visser / actionner
+    private bool aimIsHeldInteraction;           // E se maintient au lieu de s'appuyer
+    private float aimHoldProgress;               // avancement repliqué, pour la jauge
+
+    // Cible que ce joueur maintient. Cote proprietaire seulement : c'est le serveur qui
+    // fait foi, ceci ne sert qu'a savoir quand envoyer le message de fin.
+    private NetworkObject holdTarget;
+
+    // Cote serveur : ce que ce joueur maintient, pour pouvoir le relacher proprement s'il
+    // se deconnecte en pleine reparation.
+    private IInteractable serverHoldTarget;
 
     // Ce que porte ce joueur. Ecrit par le serveur, lu par tous : un autre client peut ainsi
     // savoir si ce joueur a les mains prises (utile pour les animations plus tard).
@@ -115,9 +125,15 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
     public override void OnNetworkDespawn()
     {
         ReleaseInput();
+        holdTarget = null;
 
-        // Un joueur qui se deconnecte ne doit pas emporter la valise dans le vide.
-        if (IsServer && TryGetHeld(out var carried))
+        // Un joueur qui se deconnecte ne doit pas emporter la valise dans le vide, ni rester
+        // inscrit sur le generateur qu'il etait en train de reparer.
+        if (!IsServer) return;
+
+        ServerEndHold();
+
+        if (TryGetHeld(out var carried))
             carried.ServerDetach(transform);
     }
 
@@ -147,6 +163,10 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         // Visee evaluee a chaque frame : elle sert a l'interaction comme au point de visee.
         RefreshAim();
 
+        // Un maintien en cours monopolise la touche : tant qu'on repare, E ne ramasse ni
+        // ne repose quoi que ce soit.
+        if (UpdateHold()) return;
+
         // Clic gauche : appliquer ce qu'on tient. Prioritaire sur le reste, sinon visser
         // une ampoule reviendrait a la lacher par terre.
         if (input.Player.Attack.WasPressedThisFrame() && aimObject != null && aimCanUse)
@@ -172,6 +192,46 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
     }
 
     /// <summary>
+    /// Gere le debut et la fin d'une interaction maintenue. Retourne vrai si cette frame
+    /// appartient a un maintien — auquel cas E ne doit rien declencher d'autre.
+    ///
+    /// Le client n'avance aucune progression : il signale seulement qu'il commence et qu'il
+    /// arrete. Le compte se fait sur le serveur, sinon deux joueurs qui reparent ensemble
+    /// tiendraient chacun leur propre jauge.
+    /// </summary>
+    private bool UpdateHold()
+    {
+        if (holdTarget != null)
+        {
+            // On arrete des que l'une des trois conditions tombe : touche relachee, regard
+            // detourne, ou action devenue impossible (le generateur vient de repartir).
+            var stillHolding = input.Player.Interact.IsPressed()
+                               && aimObject == holdTarget
+                               && aimCanInteract;
+
+            if (!stillHolding)
+            {
+                holdTarget = null;
+                RequestHoldEndRpc();
+            }
+
+            return true;
+        }
+
+        if (!input.Player.Interact.WasPressedThisFrame()) return false;
+
+        // Mains pleines : E reste la touche pour reposer, on ne repare pas une valise a la main.
+        if (heldItem.Value.TryGet(out _)) return false;
+
+        if (aimObject == null || !aimIsHeldInteraction || !aimCanInteract) return false;
+
+        holdTarget = aimObject;
+        RequestHoldBeginRpc(new NetworkObjectReference(holdTarget));
+
+        return true;
+    }
+
+    /// <summary>
     /// Cherche un element interactif dans l'axe du regard, a portee de bras : une valise au
     /// sol, une douille, et demain une porte ou un generateur.
     /// </summary>
@@ -180,6 +240,8 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         aimObject = null;
         aimCanInteract = false;
         aimCanUse = false;
+        aimIsHeldInteraction = false;
+        aimHoldProgress = 0f;
 
         var origin = aimSource != null ? aimSource : transform;
 
@@ -201,6 +263,8 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         aimObject = behaviour.NetworkObject;
         aimCanInteract = interactable.CanInteract(this);
         aimCanUse = interactable.CanUse(this);
+        aimIsHeldInteraction = interactable.IsHeldInteraction;
+        aimHoldProgress = interactable.HoldProgress;
     }
 
     /// <summary>
@@ -223,6 +287,34 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         var previous = GUI.color;
         GUI.color = onTarget ? crosshairOnTarget : crosshairIdle;
         GUI.DrawTexture(rect, Texture2D.whiteTexture);
+        GUI.color = previous;
+
+        // Une action maintenue sans retour visuel est injouable : on ne sait pas si ca
+        // avance, ni combien il reste.
+        if (aimIsHeldInteraction && aimCanInteract)
+            DrawHoldBar(aimHoldProgress);
+    }
+
+    /// <summary>
+    /// Jauge de progression sous le viseur. Elle affiche une valeur repliquee : quand un
+    /// collegue repare le meme generateur, on voit sa jauge monter sans le toucher.
+    /// </summary>
+    private void DrawHoldBar(float progress)
+    {
+        const float width = 140f;
+        const float height = 6f;
+
+        var x = (Screen.width - width) * 0.5f;
+        var y = Screen.height * 0.5f + 24f;
+
+        var previous = GUI.color;
+
+        GUI.color = new Color(0f, 0f, 0f, 0.45f);
+        GUI.DrawTexture(new Rect(x, y, width, height), Texture2D.whiteTexture);
+
+        GUI.color = crosshairOnTarget;
+        GUI.DrawTexture(new Rect(x, y, width * Mathf.Clamp01(progress), height), Texture2D.whiteTexture);
+
         GUI.color = previous;
     }
 
@@ -267,6 +359,42 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         if (interactable == null || !interactable.CanUse(this)) return;
 
         interactable.ServerUse(this);
+    }
+
+    [Rpc(SendTo.Server)]
+    private void RequestHoldBeginRpc(NetworkObjectReference targetRef)
+    {
+        if (!targetRef.TryGet(out var targetObject)) return;
+
+        if (Vector3.Distance(transform.position, targetObject.transform.position) > serverMaxDistance)
+            return;
+
+        var interactable = targetObject.GetComponent<IInteractable>();
+
+        if (interactable == null || !interactable.IsHeldInteraction || !interactable.CanInteract(this))
+            return;
+
+        // Un joueur ne maintient qu'une chose a la fois : s'il en tenait deja une, elle est
+        // relachee proprement plutot que laissee inscrite dessus.
+        ServerEndHold();
+
+        serverHoldTarget = interactable;
+        interactable.ServerHoldBegin(this);
+    }
+
+    [Rpc(SendTo.Server)]
+    private void RequestHoldEndRpc()
+    {
+        ServerEndHold();
+    }
+
+    /// <summary>Retire ce joueur de l'action qu'il maintenait, quelle qu'en soit la raison.</summary>
+    private void ServerEndHold()
+    {
+        if (!IsServer || serverHoldTarget == null) return;
+
+        serverHoldTarget.ServerHoldEnd(this);
+        serverHoldTarget = null;
     }
 
     [Rpc(SendTo.Server)]

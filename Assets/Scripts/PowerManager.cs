@@ -1,7 +1,6 @@
 using System;
 using Unity.Netcode;
 using UnityEngine;
-using UnityEngine.InputSystem;
 
 /// <summary>
 /// Courant de l'hotel : premier etat global du jeu.
@@ -19,11 +18,6 @@ public class PowerManager : NetworkBehaviour
 {
     [Tooltip("Etat au lancement de la partie. Le generateur prendra le relais plus tard.")]
     [SerializeField] private bool startPowered = true;
-
-    [Header("Debug — provisoire")]
-    [Tooltip("U bascule le courant. Uniquement chez l'hote. A retirer quand le generateur " +
-             "sera en place.")]
-    [SerializeField] private bool debugToggleKey = true;
 
     public static PowerManager Instance { get; private set; }
 
@@ -114,29 +108,9 @@ public class PowerManager : NetworkBehaviour
         PowerChanged?.Invoke(value);
     }
 
-    private void Update()
-    {
-        if (!debugToggleKey || !IsSpawned || Keyboard.current == null) return;
-        if (!Keyboard.current.uKey.wasPressedThisFrame) return;
-
-        // Meme touche pour tout le monde, mais le client ne bascule rien lui-meme : il
-        // envoie une requete et attend la valeur repliquee, exactement comme pour ramasser
-        // un objet. C'est ce qui garantit que tout le monde voit la meme piece dans le noir.
-        if (IsServer)
-            ServerSetPower(!hasPower.Value);
-        else
-            RequestTogglePowerRpc();
-    }
-
-    [Rpc(SendTo.Server)]
-    private void RequestTogglePowerRpc()
-    {
-        ServerSetPower(!hasPower.Value);
-    }
-
     /// <summary>
-    /// Coupe ou retablit le courant. Serveur uniquement — unique porte d'entree, le
-    /// generateur passera par la.
+    /// Coupe ou retablit le courant. Serveur uniquement — unique porte d'entree, aujourd'hui
+    /// empruntee par <see cref="Generator"/>.
     /// </summary>
     public void ServerSetPower(bool value)
     {

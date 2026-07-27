@@ -31,4 +31,28 @@ public interface IInteractable
 
     /// <summary>Execute l'action secondaire. Serveur uniquement.</summary>
     void ServerUse(PlayerCarry player) { }
+
+    /// <summary>
+    /// L'action demande-t-elle de **maintenir** E au lieu d'appuyer ? Un generateur a
+    /// relancer, une porte a forcer, un cadavre a trainer.
+    ///
+    /// Par defaut non : les objets deja ecrits gardent leur pression instantanee.
+    /// </summary>
+    bool IsHeldInteraction => false;
+
+    /// <summary>
+    /// Avancement 0..1 de l'action maintenue, pour l'affichage. Doit venir d'un etat
+    /// repliqué : plusieurs joueurs peuvent pousser la meme action, ils doivent tous voir
+    /// la meme jauge.
+    /// </summary>
+    float HoldProgress => 0f;
+
+    /// <summary>Un joueur commence a maintenir. Serveur uniquement.</summary>
+    void ServerHoldBegin(PlayerCarry player) { }
+
+    /// <summary>
+    /// Un joueur cesse de maintenir : touche relachee, regard detourne, trop loin, ou
+    /// deconnexion. Serveur uniquement.
+    /// </summary>
+    void ServerHoldEnd(PlayerCarry player) { }
 }
