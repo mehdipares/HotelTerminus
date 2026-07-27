@@ -3,105 +3,124 @@ using Unity.Netcode;
 using UnityEngine;
 
 /// <summary>
-/// Chariot de service : on s'accroche aux poignees, on pousse, il roule et cogne les murs.
+/// Chariot de service. Le joueur ne le pousse pas : il le **conduit**.
 ///
-/// **Autorite : elle suit le pousseur.** C'est la seule exception du projet a la regle
-/// "objets du monde = serveur", et elle est volontaire. L'avatar du joueur est en autorite
-/// Owner, donc il bouge instantanement chez son proprietaire ; un chariot simule sur le
-/// serveur repondrait un aller-retour reseau plus tard, tremblerait dans les virages, et le
-/// joueur rentrerait dans son propre chariot.
+/// Une fois aux poignees, l'ensemble {joueur + chariot} est un seul bloc solidaire. Les
+/// touches de deplacement pilotent le chariot, et la position du joueur s'en deduit — il ne
+/// se deplace plus par lui-meme. C'est ce qui rend le blocage solidaire gratuit : si le
+/// chariot ne passe pas, personne ne passe.
 ///
-/// Le serveur transfere donc la propriete du NetworkObject a celui qui prend les poignees,
-/// et la reprend au relachement. Personne aux poignees = le serveur simule, exactement la
-/// regle habituelle.
+/// La direction est celle d'un caddie : avancer / reculer, et pivoter **autour de l'essieu
+/// arriere**. Le braquage depend de la vitesse, donc on ne tourne quasiment pas sur place.
+/// C'est volontaire — un demi-tour dans un couloir etroit doit etre une galere.
 ///
-/// Consequence a retenir pour la suite : **celui qui simule le chariot devra aussi simuler
-/// ce qui repose dessus.** Sans objet dessus (etape 1) et avec des objets cales et
-/// cinematiques (etape 2), la question ne se pose pas. Elle se posera a l'etape 3, quand le
-/// chargement devra glisser et tomber : il faudra transferer la propriete du chargement en
-/// meme temps que celle du chariot.
+/// **Autorite : elle suit le pousseur.** Le serveur transfere la propriete du NetworkObject a
+/// celui qui prend les poignees et la reprend au relachement ; personne aux poignees = le
+/// serveur simule. Un chariot simule sur le serveur repondrait un aller-retour reseau plus
+/// tard, ce qui est inacceptable pour un objet dont depend le deplacement du joueur.
+///
+/// **Consequence : le chariot ne peut rien bousculer par la physique.** Chez le pousseur, les
+/// objets du monde sont cinematiques puisque seul le serveur les simule. Le chariot constate
+/// donc le contact et demande au serveur d'appliquer l'impulsion — le meme chemin que la
+/// bousculade par le joueur, deja documente dans ARCHITECTURE.md.
 /// </summary>
 [RequireComponent(typeof(NetworkObject))]
 [RequireComponent(typeof(Rigidbody))]
 public class Cart : NetworkBehaviour, IInteractable
 {
-    [Header("Prises")]
-    [Tooltip("Points ou un joueur vient se placer pour pousser. Un seul exploite aujourd'hui : " +
-             "la liste existe pour que la poussee a deux n'oblige pas a tout reecrire.")]
-    [SerializeField] private Transform[] handleAnchors;
+    [Header("Reperes")]
+    [Tooltip("Ou se tient le conducteur : derriere la barre, au niveau du sol. L'origine du " +
+             "joueur etant a ses pieds, ce point doit toucher le plancher.")]
+    [SerializeField] private Transform operatorAnchor;
 
-    [Tooltip("Nombre de pousseurs acceptes. A 1 pour l'instant — au-dela il faudra repliquer " +
-             "un emplacement par prise, et decider lequel des deux simule la physique.")]
-    [SerializeField] private int maxPushers = 1;
+    [Tooltip("Essieu arriere : le point autour duquel le chariot pivote quand on braque. " +
+             "Vide = le centre de l'objet, et le chariot tournera comme une toupie.")]
+    [SerializeField] private Transform rearAxle;
 
-    [Header("Conduite")]
-    [Tooltip("Distance a laquelle le chariot se tient devant le pousseur.")]
-    [SerializeField] private float pushDistance = 0.9f;
-    [Tooltip("Nervosite du suivi. Trop haut, le chariot devient collant et rigide.")]
-    [SerializeField] private float followStiffness = 12f;
+    [Header("Vitesses")]
+    [Tooltip("Allure normale, chariot pousse.")]
+    [SerializeField] private float pushWalkSpeed = 4.2f;
 
-    [Tooltip("Marge de rattrapage sur la vitesse de la cible. Le plafond se calcule a partir " +
-             "du deplacement reel de celle-ci et non d'un chiffre fixe : un chariot qu'on " +
-             "peut semer se fait traverser, puis la prise cede. A 1 il suivrait sans jamais " +
-             "rattraper son retard.")]
-    [SerializeField] private float catchUpFactor = 1.8f;
+    [Tooltip("Allure sprint, chariot pousse. Plus lente qu'un sprint a vide — c'est le prix " +
+             "du chariot — mais nettement au-dessus de la marche poussee.")]
+    [SerializeField] private float pushSprintSpeed = 6.2f;
 
-    [Tooltip("Vitesse minimale de suivi, cible immobile : sert au recalage.")]
-    [SerializeField] private float minFollowSpeed = 2f;
+    [Tooltip("Marche arriere : lente, et sans voir derriere soi. Elle sert a se degager d'un " +
+             "cul-de-sac, pas a se deplacer. Le sprint ne s'y applique pas.")]
+    [SerializeField] private float pushReverseSpeed = 1.8f;
 
-    [Tooltip("Vivacite de l'orientation. Le chariot garde un temps de retard volontaire — il " +
-             "est lourd — mais il ne doit jamais decrocher du regard.")]
-    [SerializeField] private float turnResponse = 14f;
+    [Tooltip("Vivacite de la mise en mouvement. Basse = le chariot demarre lourdement.")]
+    [SerializeField] private float pushAcceleration = 9f;
 
-    [Tooltip("Vitesse de rotation maximale, en degres par seconde.")]
-    [SerializeField] private float maxTurnRate = 540f;
+    [Tooltip("Vivacite de l'arret. Volontairement plus basse que l'acceleration : une masse " +
+             "lancee continue sur son erre quand on lache les touches.")]
+    [SerializeField] private float pushDeceleration = 6f;
 
-    [Tooltip("Ecart maximal, en degres, entre le regard du pousseur et l'orientation du " +
-             "chariot. C'est ce qui fait qu'un chariot coince contre un mur empeche de " +
-             "tourner la tete : il faut le lacher pour regarder ailleurs.")]
-    [SerializeField] private float maxYawOffset = 30f;
+    [Header("Direction")]
+    [Tooltip("Vitesse de braquage a pleine allure, en degres par seconde.")]
+    [SerializeField] private float turnSpeed = 110f;
 
-    [Tooltip("Au-dela de cette distance la prise lache toute seule : le chariot est bloque " +
-             "contre un mur et le joueur a continue d'avancer.")]
-    [SerializeField] private float breakDistance = 1.6f;
+    [Tooltip("Vitesse de rotation sur place, chariot a l'arret, en degres par seconde. " +
+             "A l'arret le chariot tourne autour de son centre, comme un caddie dont on fait " +
+             "pivoter les roues folles ; en mouvement il braque autour de l'essieu arriere.")]
+    [SerializeField] private float pivotSpeed = 65f;
 
-    [Range(0.1f, 1f)]
-    [Tooltip("Facteur applique a la vitesse du pousseur. C'est lui qui cree la tension " +
-             "'presse mais ralenti'.")]
-    [SerializeField] private float pushSpeedFactor = 0.6f;
+    [Header("Bousculade du decor")]
+    [Tooltip("Vitesse minimale pour deranger quelque chose. En dessous on effleure.")]
+    [SerializeField] private float minPushSpeed = 0.6f;
 
-    [Tooltip("Vitesse de redressement, en degres par seconde, si le chariot a malgre tout " +
-             "reussi a s'incliner.")]
-    [SerializeField] private float uprightSpeed = 240f;
+    [Tooltip("Force transmise, par unite de vitesse.")]
+    [SerializeField] private float pushForce = 4.5f;
 
+    [Tooltip("Delai entre deux bousculades, pour ne pas envoyer un message reseau par frame " +
+             "de contact.")]
+    [SerializeField] private float pushCooldown = 0.2f;
+
+    [Tooltip("Portee de verification cote serveur. Large : il voit le chariot avec un peu de " +
+             "retard reseau.")]
+    [SerializeField] private float pushMaxDistance = 4f;
+
+    [Header("Detachement")]
+    [Tooltip("De combien le joueur est repose sur le cote en lachant, pour ne pas se " +
+             "retrouver dans la barre.")]
+    [SerializeField] private float detachSideStep = 0.85f;
+
+    [Header("Divers")]
     [Range(0f, 1f)]
-    [Tooltip("Attenuation du balancement de camera pendant la poussee. Les mains posees sur " +
-             "la barre, le buste est soutenu : la tete bouge moins qu'a mains nues. " +
-             "S'ajoute au ralentissement deja du a la vitesse reduite.")]
+    [Tooltip("Attenuation du balancement de camera. Les mains posees sur la barre, le buste " +
+             "est soutenu : la tete bouge moins qu'a mains nues.")]
     [SerializeField] private float bobDamping = 0.5f;
 
-    // Le pousseur qui simule. Repliqué parce que sa machine doit savoir qui suivre, et que
-    // les autres doivent pouvoir afficher l'etat sans deviner.
+    [Tooltip("Vitesse de redressement si le chariot a malgre tout reussi a s'incliner.")]
+    [SerializeField] private float uprightSpeed = 240f;
+
+    // Conducteur actuel. Repliqué : les autres machines doivent savoir que le chariot est
+    // occupe, et le refuser a un second joueur.
     private readonly NetworkVariable<NetworkObjectReference> driver = new(
         default,
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server);
 
-    // Serveur uniquement : la liste complete, deja prete pour plusieurs pousseurs.
+    // Serveur uniquement. Un seul element en v1 : la poussee a deux est une mecanique
+    // distincte, la liste existe pour ne pas avoir a tout reecrire ce jour-la.
     private readonly List<PlayerCarry> pushers = new();
 
     private Rigidbody body;
-    private Vector3 lastTarget;                                  // cible de la frame precedente
-    private bool hasLastTarget;
-
-    public float PushSpeedFactor => pushSpeedFactor;
+    private Vector2 driveInput;                  // commandes du conducteur, chez lui seulement
+    private bool driveSprint;
+    private float currentSpeed;                  // vitesse longitudinale lissee
+    private float nextPushTime;
 
     public float BobDamping => bobDamping;
 
-    /// <summary>Orientation actuelle du chariot, sur laquelle le regard du pousseur est bride.</summary>
+    /// <summary>Orientation du chariot. Le corps du conducteur y est soude.</summary>
     public float Yaw => transform.eulerAngles.y;
 
-    public float MaxYawOffset => maxYawOffset;
+    /// <summary>Place du conducteur, dont sa position se deduit entierement.</summary>
+    public Vector3 OperatorPosition => operatorAnchor != null ? operatorAnchor.position : transform.position;
+
+    /// <summary>Vitesse du chariot, lue par le joueur pour son balancement de marche.</summary>
+    public Vector3 Velocity => body != null ? body.linearVelocity : Vector3.zero;
 
     public bool HasDriver => driver.Value.TryGet(out var target) && target != null;
 
@@ -110,23 +129,22 @@ public class Cart : NetworkBehaviour, IInteractable
         body = GetComponent<Rigidbody>();
 
         // On ne fait pas confiance au reglage de l'inspecteur, comme pour le isTrigger d'une
-        // DeliveryZone : a cette etape le chariot est un bloc rigide qui ne bascule pas.
-        // C'est une decision de conception, elle a sa place dans le code — une case oubliee
-        // laisse un chariot couche sur le flanc dont le joueur ne peut plus rien faire.
+        // DeliveryZone : le chariot ne bascule pas. Une case oubliee laisserait un chariot
+        // couche sur le flanc dont le joueur ne peut plus rien faire.
         body.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
     }
 
     // ---------- Interaction ----------
 
     /// <summary>
-    /// Prenable si le joueur a les mains libres et que les poignees sont disponibles.
-    /// Le relachement ne passe pas par ici : E pendant la poussee est traite par
+    /// Un seul conducteur en v1 : un second joueur se voit refuser le chariot, il est occupe.
+    /// Le relachement ne passe pas par ici — E pendant la conduite est traite par
     /// <see cref="PlayerCarry"/>, qui sait deja que les mains sont prises.
     /// </summary>
     public bool CanInteract(PlayerCarry player)
     {
-        // On teste HasDriver et non la liste des pousseurs : la liste est serveur uniquement,
-        // un client la verrait toujours vide et colorerait le viseur a tort.
+        // HasDriver et non la liste : celle-ci est serveur uniquement, un client la verrait
+        // toujours vide et colorerait le viseur alors que le chariot est pris.
         return player != null && !player.IsPushingCart && player.HasFreeHand && !HasDriver;
     }
 
@@ -134,20 +152,11 @@ public class Cart : NetworkBehaviour, IInteractable
     {
         if (!IsServer || !CanInteract(player)) return;
 
-        ServerTakeHandles(player);
-    }
-
-    // ---------- Ordres serveur ----------
-
-    private void ServerTakeHandles(PlayerCarry player)
-    {
-        if (pushers.Contains(player) || pushers.Count >= Mathf.Max(1, maxPushers)) return;
-
         pushers.Add(player);
         driver.Value = new NetworkObjectReference(player.NetworkObject);
         player.ServerSetPushedCart(NetworkObject);
 
-        // Le coeur du choix d'architecture : la machine du pousseur devient celle qui simule.
+        // Le coeur du choix d'architecture : la machine du conducteur devient celle qui simule.
         NetworkObject.ChangeOwnership(player.OwnerClientId);
     }
 
@@ -173,25 +182,113 @@ public class Cart : NetworkBehaviour, IInteractable
         pushers.Clear();
     }
 
-    // ---------- Conduite, chez le proprietaire ----------
+    // ---------- Conduite ----------
+
+    /// <summary>
+    /// Commandes du conducteur. Appele par son propre PlayerController : la machine du
+    /// conducteur est celle qui possede le chariot, donc l'appel reste local et il n'y a
+    /// aucun RPC par frame.
+    /// </summary>
+    public void SetDriveInput(Vector2 input, bool sprinting)
+    {
+        driveInput = input;
+        driveSprint = sprinting;
+    }
+
+    /// <summary>
+    /// Emplacement libre ou reposer le joueur qui lache : sur un cote, jamais dans la barre.
+    /// On essaie la droite puis la gauche, et on renonce si les deux sont encombrees — mieux
+    /// vaut ne pas bouger que traverser un mur.
+    /// </summary>
+    public Vector3 DetachPosition(float capsuleRadius, float capsuleHeight)
+    {
+        var origin = OperatorPosition;
+
+        foreach (var side in new[] { transform.right, -transform.right })
+        {
+            var candidate = origin + side * detachSideStep;
+
+            var bottom = candidate + Vector3.up * capsuleRadius;
+            var top = candidate + Vector3.up * (capsuleHeight - capsuleRadius);
+
+            if (!Physics.CheckCapsule(bottom, top, capsuleRadius * 0.9f,
+                                      ~0, QueryTriggerInteraction.Ignore))
+            {
+                return candidate;
+            }
+        }
+
+        return origin;
+    }
 
     private void FixedUpdate()
     {
-        // IsOwner : le serveur quand personne ne pousse, le pousseur sinon. Une seule machine
-        // simule, jamais deux.
+        // IsOwner : le serveur quand personne ne conduit, le conducteur sinon. Une seule
+        // machine simule, jamais deux.
         if (!IsSpawned || !IsOwner || body == null) return;
 
-        // Avant toute conduite, et meme sans pousseur : un chariot abandonne de travers doit
-        // se relever tout seul.
         KeepUpright();
 
-        if (!TryGetDriver(out var driverTransform))
+        if (!HasDriver)
         {
-            hasLastTarget = false;
+            // Chariot abandonne : on ne lui impose plus rien, la physique fait le reste.
+            currentSpeed = 0f;
+            driveInput = Vector2.zero;
+            driveSprint = false;
             return;
         }
 
-        Drive(driverTransform);
+        Drive();
+    }
+
+    private void Drive()
+    {
+        // Avancer et reculer n'ont pas la meme vitesse : la marche arriere sert a se degager,
+        // pas a se deplacer, et le sprint ne s'y applique pas.
+        var throttle = Mathf.Clamp(driveInput.y, -1f, 1f);
+
+        var topSpeed = throttle >= 0f
+            ? (driveSprint ? pushSprintSpeed : pushWalkSpeed)
+            : pushReverseSpeed;
+
+        var targetSpeed = throttle * topSpeed;
+
+        // Deux taux distincts : une masse lancee se relance moins vite qu'elle ne s'arrete,
+        // ou l'inverse selon le reglage. C'est ce qui donne le poids du chariot.
+        var rate = Mathf.Abs(targetSpeed) > Mathf.Abs(currentSpeed)
+            ? pushAcceleration
+            : pushDeceleration;
+
+        currentSpeed = Mathf.MoveTowards(currentSpeed, targetSpeed, rate * Time.fixedDeltaTime);
+
+        // La reference est l'allure de marche : en sprint on a donc tout le braquage, pas
+        // davantage — un chariot lance ne doit pas tourner comme une moto.
+        var speedRatio = Mathf.Clamp01(Mathf.Abs(currentSpeed) / Mathf.Max(pushWalkSpeed, 0.01f));
+
+        var degrees = Mathf.Lerp(pivotSpeed, turnSpeed, speedRatio);
+        var omega = Mathf.Clamp(driveInput.x, -1f, 1f) * degrees * Mathf.Deg2Rad;
+
+        // Le point de pivot glisse avec l'allure, comme un caddie a roues folles :
+        //   - a l'arret, autour du **centre** — les deux bouts balaient autant, on tourne
+        //     sur place sans avancer, et il faut juste la place de le faire ;
+        //   - lance, autour de l'**essieu arriere** — le chariot braque par l'avant.
+        //
+        // Le Rigidbody, lui, tourne toujours autour de son centre de masse : on compense donc
+        // par la vitesse lineaire qu'il faut pour que le point de pivot, lui, ne bouge pas.
+        var axle = rearAxle != null ? rearAxle.position : body.worldCenterOfMass;
+        var pivot = Vector3.Lerp(body.worldCenterOfMass, axle, speedRatio);
+
+        var arm = body.worldCenterOfMass - pivot;
+        arm.y = 0f;
+
+        var spin = Vector3.Cross(new Vector3(0f, omega, 0f), arm);
+        var velocity = transform.forward * currentSpeed + spin;
+
+        // La verticale reste a la gravite : sans ca le chariot flotterait des la moindre bosse.
+        velocity.y = body.linearVelocity.y;
+
+        body.linearVelocity = velocity;
+        body.angularVelocity = new Vector3(0f, omega, 0f);
     }
 
     /// <summary>
@@ -202,104 +299,75 @@ public class Cart : NetworkBehaviour, IInteractable
     private void KeepUpright()
     {
         var euler = transform.eulerAngles;
-        var pitch = Mathf.DeltaAngle(0f, euler.x);
-        var roll = Mathf.DeltaAngle(0f, euler.z);
 
-        if (Mathf.Abs(pitch) < 0.5f && Mathf.Abs(roll) < 0.5f) return;
-
-        var upright = Quaternion.Euler(0f, euler.y, 0f);
-
-        body.MoveRotation(Quaternion.RotateTowards(
-            transform.rotation, upright, uprightSpeed * Time.fixedDeltaTime));
-    }
-
-    private bool TryGetDriver(out Transform driverTransform)
-    {
-        driverTransform = null;
-
-        if (NetworkManager == null) return false;
-        if (!driver.Value.TryGet(out var target) || target == null) return false;
-
-        driverTransform = target.transform;
-        return true;
-    }
-
-    private void Drive(Transform driverTransform)
-    {
-        var handle = Handle;
-
-        // La prise cede quand le joueur s'eloigne **physiquement** du chariot, jamais quand
-        // celui-ci n'est pas encore aligne. Mesurer l'ecart a la position ideale ferait
-        // lacher au moindre coup de souris : cette cible orbite autour du joueur en un
-        // instant, alors que le chariot est toujours a portee de bras.
-        var toHandle = handle.position - driverTransform.position;
-        toHandle.y = 0f;
-
-        if (toHandle.magnitude > breakDistance)
+        if (Mathf.Abs(Mathf.DeltaAngle(0f, euler.x)) < 0.5f
+            && Mathf.Abs(Mathf.DeltaAngle(0f, euler.z)) < 0.5f)
         {
-            ReleaseFromOwner(driverTransform);
             return;
         }
 
-        // Cible horizontale seulement : la hauteur reste a la charge de la gravite, sinon le
-        // chariot leviterait des que le joueur monterait une marche.
-        var target = driverTransform.position + driverTransform.forward * pushDistance;
-        var delta = target - handle.position;
-        delta.y = 0f;
-
-        // Le plafond depend de la vitesse de la cible, qui contient a la fois le deplacement
-        // du joueur et sa rotation. Le calculer sur sa seule vitesse de marche bridait le
-        // chariot a l'arret : le joueur tourne sur place, la cible decrit pourtant un arc de
-        // cercle a bonne allure, et le chariot n'avait pas le droit de la suivre.
-        var targetSpeed = hasLastTarget
-            ? (target - lastTarget).magnitude / Time.fixedDeltaTime
-            : 0f;
-
-        lastTarget = target;
-        hasLastTarget = true;
-
-        var speedCap = Mathf.Max(minFollowSpeed, targetSpeed * catchUpFactor);
-
-        // Par la velocite et non par MovePosition : c'est ce qui laisse un mur arreter
-        // reellement le chariot au lieu de le faire traverser.
-        var velocity = Vector3.ClampMagnitude(delta * followStiffness, speedCap);
-        velocity.y = body.linearVelocity.y;
-        body.linearVelocity = velocity;
-
-        // Le chariot s'aligne sur le regard horizontal du pousseur. Les rotations X et Z sont
-        // bloquees sur le Rigidbody : a cette etape c'est un bloc rigide, il ne bascule pas.
-        var yawError = Mathf.DeltaAngle(transform.eulerAngles.y, driverTransform.eulerAngles.y);
-        var turn = Mathf.Clamp(yawError * turnResponse, -maxTurnRate, maxTurnRate);
-
-        body.angularVelocity = new Vector3(0f, turn * Mathf.Deg2Rad, 0f);
+        body.MoveRotation(Quaternion.RotateTowards(
+            transform.rotation, Quaternion.Euler(0f, euler.y, 0f),
+            uprightSpeed * Time.fixedDeltaTime));
     }
 
-    /// <summary>
-    /// Le proprietaire constate que la prise a cede. Il ne decide rien lui-meme : il le
-    /// signale au serveur, qui reste seul a ecrire l'etat.
-    /// </summary>
-    private void ReleaseFromOwner(Transform driverTransform)
-    {
-        if (!driverTransform.TryGetComponent<PlayerCarry>(out var carry)) return;
+    // ---------- Bousculade du decor ----------
 
-        if (IsServer)
-            ServerRelease(carry);
-        else
-            RequestReleaseRpc(new NetworkObjectReference(carry.NetworkObject));
+    /// <summary>
+    /// Le chariot derange ce qu'il percute : valises au sol, ampoules, chaises, plantes.
+    /// Jamais les murs — ceux-ci n'ont pas de Rigidbody, donc ils le bloquent, point.
+    ///
+    /// Le conducteur constate le contact et demande ; le serveur applique. Sa machine ne peut
+    /// pas le faire elle-meme : les objets du monde y sont cinematiques, seul le serveur les
+    /// simule. Meme schema que la bousculade par le joueur.
+    ///
+    /// Les futurs clients PNJ passeront par ce meme chemin, sans rien changer ici.
+    /// </summary>
+    private void OnCollisionEnter(Collision collision) => TryPush(collision);
+
+    private void OnCollisionStay(Collision collision) => TryPush(collision);
+
+    private void TryPush(Collision collision)
+    {
+        if (!IsSpawned || !IsOwner || !HasDriver) return;
+        if (Time.time < nextPushTime) return;
+
+        // Sans Rigidbody, c'est du decor fixe : un mur, un sol. Rien a bousculer.
+        var otherBody = collision.rigidbody;
+        if (otherBody == null) return;
+
+        // Pas de test isKinematic : chez le conducteur, NetworkRigidbody rend cinematique
+        // tout ce que le serveur simule. Ce test appartient au serveur.
+        var target = otherBody.GetComponentInParent<NetworkObject>();
+        if (target == null || target == NetworkObject) return;
+
+        var speed = Mathf.Abs(currentSpeed);
+        if (speed < minPushSpeed) return;
+
+        var direction = otherBody.position - transform.position;
+        direction.y = 0f;
+        if (direction.sqrMagnitude < 0.0001f) return;
+
+        nextPushTime = Time.time + pushCooldown;
+
+        RequestPushRpc(new NetworkObjectReference(target), direction.normalized, speed);
     }
 
     [Rpc(SendTo.Server)]
-    private void RequestReleaseRpc(NetworkObjectReference playerRef)
+    private void RequestPushRpc(NetworkObjectReference targetRef, Vector3 direction, float speed)
     {
-        if (!playerRef.TryGet(out var target) || target == null) return;
-        if (!target.TryGetComponent<PlayerCarry>(out var carry)) return;
+        if (!targetRef.TryGet(out var target) || target == null) return;
 
-        ServerRelease(carry);
+        // Le serveur ne fait confiance a rien : ni a la cible, ni a la distance, ni a la
+        // vitesse annoncee.
+        if (Vector3.Distance(target.transform.position, transform.position) > pushMaxDistance)
+            return;
+
+        if (!target.TryGetComponent<Rigidbody>(out var otherBody) || otherBody.isKinematic)
+            return;
+
+        var force = Mathf.Min(speed, pushSprintSpeed) * pushForce;
+
+        otherBody.AddForce(direction.normalized * force, ForceMode.Impulse);
     }
-
-    /// <summary>Point par lequel le chariot est tenu. L'origine de l'objet sinon.</summary>
-    private Transform Handle =>
-        handleAnchors != null && handleAnchors.Length > 0 && handleAnchors[0] != null
-            ? handleAnchors[0]
-            : transform;
 }

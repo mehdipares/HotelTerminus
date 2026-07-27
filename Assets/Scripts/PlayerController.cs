@@ -41,6 +41,13 @@ public class PlayerController : NetworkBehaviour
     [SerializeField] private float pitchMax = 80f;
     [SerializeField] private float baseFov = 70f;
 
+    [Tooltip("Amplitude du mouvement de tete quand le corps est soude a un chariot. Assez " +
+             "pour jeter un oeil sur le cote, jamais assez pour voir derriere soi.")]
+    [SerializeField] private float lookConeAngle = 55f;
+
+    [Tooltip("Vitesse a laquelle la tete se remet dans l'axe une fois le chariot lache.")]
+    [SerializeField] private float headRecenter = 220f;
+
     [Header("Balancement de marche")]
     [Tooltip("Amplitudes a 0 = effet desactive. A exposer dans les options : ce balancement " +
              "donne la nausee a une partie des joueurs.")]
@@ -86,6 +93,7 @@ public class PlayerController : NetworkBehaviour
     private GameObject sceneCamera;                      // camera de la scene, eteinte le temps de la partie
 
     private float pitch;                                 // rotation verticale, camera uniquement
+    private float headYaw;                               // tete tournee dans son cone, chariot en main
     private float verticalVelocity;
     private Vector3 horizontalVelocity;                  // lissee, c'est elle qui donne l'inertie
     private bool wasGrounded = true;
@@ -233,50 +241,35 @@ public class PlayerController : NetworkBehaviour
 
         var look = input.Player.Look.ReadValue<Vector2>() * mouseSensitivity;
 
-        // Horizontal : on tourne tout le corps, donc c'est repliqué par le NetworkTransform.
-        transform.Rotate(Vector3.up * ConstrainYaw(look.x));
+        if (carry != null && carry.IsPushingCart)
+        {
+            // Corps soude au chariot : la souris ne fait plus tourner que la tete, dans un
+            // cone. Assez pour jeter un oeil sur le cote, jamais assez pour voir derriere —
+            // reculer se fait donc a l'aveugle, comme voulu.
+            //
+            // Ce mouvement n'est pas repliqué : les autres joueurs ne verront pas la tete
+            // tourner, exactement comme pour le regard vertical. C'est le prix de ne pas
+            // ajouter un axe sur le reseau.
+            headYaw = Mathf.Clamp(headYaw + look.x, -lookConeAngle, lookConeAngle);
+        }
+        else
+        {
+            // Horizontal : on tourne tout le corps, donc c'est repliqué par le NetworkTransform.
+            transform.Rotate(Vector3.up * look.x);
+            headYaw = Mathf.MoveTowards(headYaw, 0f, headRecenter * Time.deltaTime);
+        }
 
         // Vertical : uniquement la camera locale, un corps qui bascule serait absurde.
-        // Jamais bride par le chariot : lever les yeux ne demande pas de le faire pivoter.
         pitch = Mathf.Clamp(pitch - look.y, pitchMin, pitchMax);
-    }
-
-    /// <summary>
-    /// Bride la rotation horizontale sur celle du chariot pousse : le regard ne peut pas
-    /// s'ecarter de son orientation au-dela d'une marge.
-    ///
-    /// Consequence voulue : un chariot coince contre un mur ne peut plus pivoter, donc le
-    /// joueur ne peut plus tourner la tete non plus — il doit le lacher pour regarder
-    /// ailleurs. Le chariot ne se contente pas de ralentir, il confisque le regard. C'est ce
-    /// qui en fait un outil encombrant plutot qu'un simple bonus de capacite.
-    /// </summary>
-    private float ConstrainYaw(float delta)
-    {
-        if (carry == null || !carry.TryGetYawConstraint(out var cartYaw, out var maxOffset))
-            return delta;
-
-        var current = Mathf.DeltaAngle(cartYaw, transform.eulerAngles.y);
-        var next = current + delta;
-
-        // Dans la marge : rien a brider.
-        if (Mathf.Abs(next) <= maxOffset) return delta;
-
-        // Deja au-dela — typiquement a l'instant ou l'on saisit les poignees en arrivant de
-        // biais. On n'impose aucune correction, on interdit seulement d'aggraver : un regard
-        // brutalement recale a la prise du chariot serait insupportable.
-        if (Mathf.Abs(next) < Mathf.Abs(current)) return delta;
-
-        if (Mathf.Abs(current) >= maxOffset) return 0f;
-
-        // Juste ce qu'il faut pour atteindre la limite, pas un degre de plus.
-        return Mathf.Sign(next) * maxOffset - current;
     }
 
     // ---------- Accroupissement ----------
 
     private void UpdateCrouch()
     {
-        var wantsCrouch = input.Player.Crouch.IsPressed() && !IsDiving;
+        // Ni accroupi ni en roulade quand on tient une barre a deux mains.
+        var wantsCrouch = input.Player.Crouch.IsPressed() && !IsDiving
+                          && (carry == null || !carry.IsPushingCart);
 
         // On ne se releve pas dans un plafond bas : sinon on traverse le decor.
         if (!wantsCrouch && crouchBlend > 0.01f && BlockedAbove())
@@ -321,6 +314,14 @@ public class PlayerController : NetworkBehaviour
 
         wasGrounded = grounded;
 
+        // La conduite gere son propre deplacement et sa propre gravite : on sort ici, sinon
+        // le deplacement normal s'ajouterait par-dessus et le joueur avancerait deux fois.
+        if (carry != null && carry.TryGetCart(out var cart))
+        {
+            DriveCart(cart);
+            return;
+        }
+
         if (IsDiving)
             UpdateDive();
         else
@@ -334,6 +335,45 @@ public class PlayerController : NetworkBehaviour
             verticalVelocity += gravity * Time.deltaTime;
 
         controller.Move((horizontalVelocity + Vector3.up * verticalVelocity) * Time.deltaTime);
+    }
+
+    /// <summary>
+    /// Le joueur conduit : ses touches pilotent le chariot, et sa propre position se deduit
+    /// de celle du chariot. Il ne se deplace plus par lui-meme.
+    ///
+    /// C'est ce qui rend le blocage solidaire gratuit : le chariot seul decide de ce qui
+    /// passe, donc un chariot arrete contre un mur arrete aussi son conducteur. Plus besoin
+    /// de laisse ni de rappel — les deux ne peuvent pas diverger.
+    /// </summary>
+    private void DriveCart(Cart cart)
+    {
+        // Le sprint fonctionne aussi chariot en main : plus lent qu'a vide, mais il faut
+        // pouvoir traverser un couloir sans que ce soit une punition.
+        cart.SetDriveInput(input.Player.Move.ReadValue<Vector2>(),
+                           input.Player.Sprint.IsPressed());
+
+        var target = cart.OperatorPosition;
+        var delta = target - transform.position;
+        delta.y = 0f;
+
+        // La gravite reste appliquee : le point d'ancrage est au sol du chariot, mais le
+        // joueur doit coller au terrain et non leviter sur une bosse.
+        verticalVelocity = controller.isGrounded
+            ? -2f
+            : verticalVelocity + gravity * Time.deltaTime;
+
+        controller.Move(delta + Vector3.up * (verticalVelocity * Time.deltaTime));
+
+        // Corps solidaire du chariot, orientation comprise. La tete, elle, garde un peu de
+        // liberte — voir Look().
+        transform.rotation = Quaternion.Euler(0f, cart.Yaw, 0f);
+
+        // Renseignee pour tout ce qui lit la vitesse du joueur : balancement de marche,
+        // atterrissage, champ de vision. Composante verticale ecartee, sinon une descente
+        // gonflerait le balancement.
+        var velocity = cart.Velocity;
+        velocity.y = 0f;
+        horizontalVelocity = velocity;
     }
 
     private void UpdateWalk(bool grounded)
@@ -350,11 +390,6 @@ public class PlayerController : NetworkBehaviour
         var uprightSpeed = sprinting ? sprintSpeed : walkSpeed;
         var speed = Mathf.Lerp(uprightSpeed, crouchSpeed, crouchBlend)
                     * (recovering ? recoverySpeedFactor : 1f);
-
-        // Pousser un chariot ralentit : c'est la contrepartie de tout transporter d'un coup.
-        // Le facteur vient de l'objet manipule, le controleur n'a pas a connaitre le chariot.
-        if (carry != null)
-            speed *= carry.MoveSpeedFactor;
 
         var direction = Vector3.ClampMagnitude(transform.right * move.x + transform.forward * move.y, 1f);
         var target = direction * speed;
@@ -512,7 +547,7 @@ public class PlayerController : NetworkBehaviour
                                     + Vector3.up * (landingOffset - diveCameraDip * diveCurve);
 
         // Le roulis n'existe que pendant la roulade : ailleurs il donne juste la nausee.
-        cameraPivot.localRotation = Quaternion.Euler(pitch, 0f, diveCameraRoll * diveCurve);
+        cameraPivot.localRotation = Quaternion.Euler(pitch, headYaw, diveCameraRoll * diveCurve);
 
         if (playerCamera == null) return;
 

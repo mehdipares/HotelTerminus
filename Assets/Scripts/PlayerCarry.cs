@@ -87,19 +87,16 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
     public bool HasFreeHand => !heldItem.Value.TryGet(out _) && !IsPushingCart;
 
     /// <summary>
-    /// Facteur de vitesse impose par ce que le joueur manipule. Lu par le PlayerController :
-    /// pousser un chariot ralentit, c'est la contrepartie de tout transporter d'un coup.
-    /// </summary>
-    public float MoveSpeedFactor => TryGetCart(out var cart) ? cart.PushSpeedFactor : 1f;
-
-    /// <summary>
-    /// Attenuation du balancement de camera. Le ralentissement du a la vitesse reduite est
-    /// deja automatique ; ceci s'y ajoute, parce qu'un joueur appuye sur une barre a la tete
-    /// plus stable qu'un joueur mains nues.
+    /// Attenuation du balancement de camera : un joueur appuye sur une barre a la tete plus
+    /// stable qu'un joueur mains nues.
     /// </summary>
     public float CameraBobFactor => TryGetCart(out var cart) ? cart.BobDamping : 1f;
 
-    private bool TryGetCart(out Cart cart)
+    /// <summary>
+    /// Chariot conduit par ce joueur, s'il y en a un. Le PlayerController s'en sert pour lui
+    /// transmettre les commandes et en deduire sa propre position.
+    /// </summary>
+    public bool TryGetCart(out Cart cart)
     {
         cart = null;
 
@@ -153,6 +150,11 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
 
     public override void OnNetworkSpawn()
     {
+        pushedCart.OnValueChanged += OnPushedCartChanged;
+
+        // Un client qui rejoint doit trouver un conducteur deja en place dans le bon etat.
+        ApplyCartCollision(default, pushedCart.Value);
+
         if (!IsOwner) return;
 
         input = new InputSystem_Actions();
@@ -171,29 +173,51 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         pushedCart.Value = cart != null ? new NetworkObjectReference(cart) : default;
     }
 
+    private void OnPushedCartChanged(NetworkObjectReference previous, NetworkObjectReference current)
+        => ApplyCartCollision(previous, current);
+
+    /// <summary>
+    /// Le conducteur et son chariot cessent de se percuter le temps de la conduite.
+    ///
+    /// Sans ca, la boite qui entoure la place du conducteur chevauche en permanence sa
+    /// capsule. Un CharacterController ne pouvant pas etre pousse par un Rigidbody, c'est le
+    /// **chariot** qui encaisse l'impulsion de separation, a chaque pas de physique : il est
+    /// maintenu en l'air des que le sol se derobe, et sursaute en permanence. La gravite ne
+    /// pouvait plus faire son travail.
+    ///
+    /// La boite retrouve ainsi son seul role : bloquer contre le decor. Le joueur ne risque
+    /// pas de traverser le chariot pour autant — il ne se deplace plus par lui-meme, sa
+    /// position est deduite de celle du chariot.
+    ///
+    /// Purement local, aucun etat reseau : la physique se calcule sur chaque machine, donc
+    /// chacune applique l'exception de son cote.
+    /// </summary>
+    private void ApplyCartCollision(NetworkObjectReference previous, NetworkObjectReference current)
+    {
+        if (controller == null || NetworkManager == null) return;
+
+        if (previous.TryGet(out var old) && old != null)
+            SetCartCollisionIgnored(old, false);
+
+        if (current.TryGet(out var now) && now != null)
+            SetCartCollisionIgnored(now, true);
+    }
+
+    private void SetCartCollisionIgnored(NetworkObject cart, bool ignored)
+    {
+        foreach (var col in cart.GetComponentsInChildren<Collider>(true))
+        {
+            if (col.isTrigger) continue;
+
+            Physics.IgnoreCollision(controller, col, ignored);
+        }
+    }
+
     /// <summary>
     /// Cet objet est-il le chariot que ce joueur pousse ? Sert au PlayerController a ne pas
     /// bousculer son propre chariot : il le bloque physiquement, mais ne lui envoie pas de
     /// poussee par-dessus sa conduite.
     /// </summary>
-    /// <summary>
-    /// Limite de rotation imposee par le chariot pousse, s'il y en a un. Le PlayerController
-    /// s'en sert pour brider le regard : c'est le chariot qui decide de combien on peut
-    /// s'ecarter de son axe.
-    /// </summary>
-    public bool TryGetYawConstraint(out float cartYaw, out float maxOffset)
-    {
-        cartYaw = 0f;
-        maxOffset = 0f;
-
-        if (!TryGetCart(out var cart)) return false;
-
-        cartYaw = cart.Yaw;
-        maxOffset = cart.MaxYawOffset;
-
-        return true;
-    }
-
     public bool IsPushing(NetworkObject candidate)
     {
         return candidate != null
@@ -205,6 +229,9 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
     {
         ReleaseInput();
         holdTarget = null;
+
+        pushedCart.OnValueChanged -= OnPushedCartChanged;
+        ApplyCartCollision(pushedCart.Value, default);
 
         // Un joueur qui se deconnecte ne doit rien emporter dans le vide : ni la valise, ni
         // le generateur qu'il reparait, ni le chariot qu'il poussait.
@@ -268,6 +295,7 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         // prises, donc HasFreeHand est deja faux partout ailleurs.
         if (IsPushingCart)
         {
+            StepAsideFromCart();
             RequestCartReleaseServerRpc();
             return;
         }
@@ -481,6 +509,24 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
     private void RequestHoldEndRpc()
     {
         ServerEndHold();
+    }
+
+    /// <summary>
+    /// Repose le joueur a cote de la barre en lachant, plutot que de le laisser dans le
+    /// volume du chariot. C'est le proprietaire qui le fait : sa position lui appartient.
+    ///
+    /// Aucune teleportation — on passe par le CharacterController, donc le decor s'applique
+    /// et un cote encombre ne fait rien traverser. Le chariot, lui, ne bouge pas.
+    /// </summary>
+    private void StepAsideFromCart()
+    {
+        if (controller == null || !TryGetCart(out var cart)) return;
+
+        var target = cart.DetachPosition(controller.radius, controller.height);
+        var delta = target - transform.position;
+        delta.y = 0f;
+
+        controller.Move(delta);
     }
 
     [Rpc(SendTo.Server)]
