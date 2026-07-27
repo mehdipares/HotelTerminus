@@ -67,6 +67,48 @@ serveur uniquement**.
 
 ---
 
+## États globaux : le courant
+
+`PowerManager` est le premier état global du jeu — un objet unique dans la scène, dont
+`BulbSocket` (et demain l'ascenseur, les caméras) déduit son comportement. Deux pièges y ont
+déjà coûté une session de débogage.
+
+### Un client qui rejoint recharge la scène
+
+À la connexion, NGO recharge la scène chez le client : **tous les objets posés à la main sont
+détruits et recréés**. Un singleton écrit naïvement (`si une Instance existe déjà, je suis un
+doublon, je m'abstiens`) laisse alors la place vide — le nouvel exemplaire a refusé le poste
+au profit de l'ancien, détruit juste après.
+
+D'où deux règles pour tout objet unique de scène :
+
+- **le dernier arrivé gagne** dans `Awake` ;
+- **l'état lu par les autres ne transite pas par la référence.** `PowerManager.HasPower` lit
+  une valeur mise à jour par la `NetworkVariable`, pas `Instance.hasPower.Value`. Une lecture
+  qui traverse une référence peut tomber sur un objet mort ; une valeur, non.
+
+L'hôte ne voit jamais ce bug : il ne recharge pas la scène, c'est lui la référence.
+
+### Une valeur par défaut qui veut dire « tout va bien » cache sa propre panne
+
+`HasPower` renvoie `true` en l'absence de circuit électrique, pour qu'une scène de test
+reste jouable. Conséquence : quand la référence a été perdue, les douilles du client ont
+répondu « il y a du courant » en permanence — lumière jamais éteinte, aucune erreur, aucun
+warning.
+
+Quand un repli est nécessaire, il faut que la panne reste **visible** : ici le log
+`[Courant]` part du changement répliqué et non de l'appui touche, donc il s'affiche des deux
+côtés. Une coupure loggée chez un client dont la lumière ne bouge pas désigne immédiatement
+le coupable.
+
+### Même une touche de debug passe par le serveur
+
+`U` bascule le courant depuis n'importe quel joueur, mais un client envoie un
+`[Rpc(SendTo.Server)]` au lieu d'agir. Une commande de test qui court-circuiterait l'autorité
+donnerait des résultats de test faux — chacun dans sa propre version de l'hôtel.
+
+---
+
 ## Conventions de prefab
 
 ### L'origine d'un personnage est à ses pieds

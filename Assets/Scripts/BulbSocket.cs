@@ -41,6 +41,7 @@ public class BulbSocket : NetworkBehaviour, ICarryAnchor, IInteractable
     public override void OnNetworkSpawn()
     {
         installedBulb.OnValueChanged += OnInstalledChanged;
+        PowerManager.PowerChanged += OnPowerChanged;
 
         if (IsServer && startBulbPrefab != null)
             ServerSpawnStartBulb();
@@ -53,6 +54,7 @@ public class BulbSocket : NetworkBehaviour, ICarryAnchor, IInteractable
     public override void OnNetworkDespawn()
     {
         installedBulb.OnValueChanged -= OnInstalledChanged;
+        PowerManager.PowerChanged -= OnPowerChanged;
         UnsubscribeTrackedBulb();
     }
 
@@ -173,11 +175,14 @@ public class BulbSocket : NetworkBehaviour, ICarryAnchor, IInteractable
 
     private void OnBulbBurntChanged(bool burnt) => RefreshLight();
 
+    private void OnPowerChanged(bool powered) => RefreshLight();
+
     private void RefreshLight()
     {
         if (lamp == null) return;
 
-        // Allumee seulement si une ampoule est vissee ET qu'elle n'est pas grillee.
-        lamp.enabled = trackedBulb != null && !trackedBulb.IsBurnt;
+        // Trois conditions, toutes deduites d'un etat replique : une ampoule est vissee,
+        // elle n'est pas grillee, et l'hotel a du courant.
+        lamp.enabled = trackedBulb != null && !trackedBulb.IsBurnt && PowerManager.HasPower;
     }
 }
