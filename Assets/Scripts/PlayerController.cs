@@ -104,12 +104,15 @@ public class PlayerController : NetworkBehaviour
     private float bobWeight;                             // 0 a l'arret, 1 en pleine marche
     private float landingOffset;
 
+    private PlayerCarry carry;                           // ce que le joueur manipule
+
     private bool IsDiving => diveTimer > 0f;
     private bool IsCrouching => crouchBlend > 0.5f;
 
     private void Awake()
     {
         controller = GetComponent<CharacterController>();
+        carry = GetComponent<PlayerCarry>();
     }
 
     public override void OnNetworkSpawn()
@@ -231,10 +234,42 @@ public class PlayerController : NetworkBehaviour
         var look = input.Player.Look.ReadValue<Vector2>() * mouseSensitivity;
 
         // Horizontal : on tourne tout le corps, donc c'est repliqué par le NetworkTransform.
-        transform.Rotate(Vector3.up * look.x);
+        transform.Rotate(Vector3.up * ConstrainYaw(look.x));
 
         // Vertical : uniquement la camera locale, un corps qui bascule serait absurde.
+        // Jamais bride par le chariot : lever les yeux ne demande pas de le faire pivoter.
         pitch = Mathf.Clamp(pitch - look.y, pitchMin, pitchMax);
+    }
+
+    /// <summary>
+    /// Bride la rotation horizontale sur celle du chariot pousse : le regard ne peut pas
+    /// s'ecarter de son orientation au-dela d'une marge.
+    ///
+    /// Consequence voulue : un chariot coince contre un mur ne peut plus pivoter, donc le
+    /// joueur ne peut plus tourner la tete non plus — il doit le lacher pour regarder
+    /// ailleurs. Le chariot ne se contente pas de ralentir, il confisque le regard. C'est ce
+    /// qui en fait un outil encombrant plutot qu'un simple bonus de capacite.
+    /// </summary>
+    private float ConstrainYaw(float delta)
+    {
+        if (carry == null || !carry.TryGetYawConstraint(out var cartYaw, out var maxOffset))
+            return delta;
+
+        var current = Mathf.DeltaAngle(cartYaw, transform.eulerAngles.y);
+        var next = current + delta;
+
+        // Dans la marge : rien a brider.
+        if (Mathf.Abs(next) <= maxOffset) return delta;
+
+        // Deja au-dela — typiquement a l'instant ou l'on saisit les poignees en arrivant de
+        // biais. On n'impose aucune correction, on interdit seulement d'aggraver : un regard
+        // brutalement recale a la prise du chariot serait insupportable.
+        if (Mathf.Abs(next) < Mathf.Abs(current)) return delta;
+
+        if (Mathf.Abs(current) >= maxOffset) return 0f;
+
+        // Juste ce qu'il faut pour atteindre la limite, pas un degre de plus.
+        return Mathf.Sign(next) * maxOffset - current;
     }
 
     // ---------- Accroupissement ----------
@@ -316,6 +351,11 @@ public class PlayerController : NetworkBehaviour
         var speed = Mathf.Lerp(uprightSpeed, crouchSpeed, crouchBlend)
                     * (recovering ? recoverySpeedFactor : 1f);
 
+        // Pousser un chariot ralentit : c'est la contrepartie de tout transporter d'un coup.
+        // Le facteur vient de l'objet manipule, le controleur n'a pas a connaitre le chariot.
+        if (carry != null)
+            speed *= carry.MoveSpeedFactor;
+
         var direction = Vector3.ClampMagnitude(transform.right * move.x + transform.forward * move.y, 1f);
         var target = direction * speed;
 
@@ -384,6 +424,11 @@ public class PlayerController : NetworkBehaviour
         var target = body.GetComponentInParent<NetworkObject>();
         if (target == null) return;
 
+        // Jamais le chariot qu'on pousse : il est deja pilote par sa propre conduite, et une
+        // bousculade par-dessus le ferait vibrer et saturerait le reseau a chaque contact.
+        // Il nous bloque, en revanche — c'est ce qui rend un mur infranchissable avec lui.
+        if (carry != null && carry.IsPushing(target)) return;
+
         var speed = horizontalVelocity.magnitude;
         if (speed < minPushSpeed && !IsDiving) return;
 
@@ -430,9 +475,14 @@ public class PlayerController : NetworkBehaviour
         var speedRatio = horizontalVelocity.magnitude / Mathf.Max(walkSpeed, 0.01f);
         var walking = controller.isGrounded && !IsDiving && speedRatio > 0.1f;
 
+        // Appuye sur la barre d'un chariot, le buste est soutenu et la tete bouge moins.
+        // Cela s'ajoute au ralentissement deja porte par speedRatio, la vitesse etant reduite.
+        var bobFactor = carry != null ? carry.CameraBobFactor : 1f;
+
         // On fait varier l'amplitude plutot que de couper net le timer : sinon la camera
         // saute a chaque arret.
-        bobWeight = Mathf.MoveTowards(bobWeight, walking ? Mathf.Min(speedRatio, 1.5f) : 0f,
+        bobWeight = Mathf.MoveTowards(bobWeight,
+                                      walking ? Mathf.Min(speedRatio, 1.5f) * bobFactor : 0f,
                                       4f * Time.deltaTime);
 
         if (bobWeight > 0.001f)

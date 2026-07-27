@@ -68,13 +68,48 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server);
 
+    // Chariot pousse par ce joueur. Sur le joueur et non seulement sur le chariot : c'est
+    // l'etat des mains, et chaque machine doit pouvoir le lire pour n'importe quel joueur.
+    private readonly NetworkVariable<NetworkObjectReference> pushedCart = new(
+        default,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+
     public Transform HandAnchor => handAnchor;
 
     /// <summary>Ancre vue par un Carryable : la main de ce joueur.</summary>
     public Transform Anchor => handAnchor;
 
+    /// <summary>Pousse-t-il un chariot ? Les deux mains sont alors prises.</summary>
+    public bool IsPushingCart => TryGetCart(out _);
+
     /// <summary>Le joueur peut-il prendre quelque chose ? Une seule main pour l'instant.</summary>
-    public bool HasFreeHand => !heldItem.Value.TryGet(out _);
+    public bool HasFreeHand => !heldItem.Value.TryGet(out _) && !IsPushingCart;
+
+    /// <summary>
+    /// Facteur de vitesse impose par ce que le joueur manipule. Lu par le PlayerController :
+    /// pousser un chariot ralentit, c'est la contrepartie de tout transporter d'un coup.
+    /// </summary>
+    public float MoveSpeedFactor => TryGetCart(out var cart) ? cart.PushSpeedFactor : 1f;
+
+    /// <summary>
+    /// Attenuation du balancement de camera. Le ralentissement du a la vitesse reduite est
+    /// deja automatique ; ceci s'y ajoute, parce qu'un joueur appuye sur une barre a la tete
+    /// plus stable qu'un joueur mains nues.
+    /// </summary>
+    public float CameraBobFactor => TryGetCart(out var cart) ? cart.BobDamping : 1f;
+
+    private bool TryGetCart(out Cart cart)
+    {
+        cart = null;
+
+        // TryGet passe par le NetworkManager : hors partie il n'existe plus et l'appel leve.
+        if (!IsSpawned || NetworkManager == null) return false;
+
+        return pushedCart.Value.TryGet(out var target)
+               && target != null
+               && target.TryGetComponent(out cart);
+    }
 
     /// <summary>
     /// Met un objet dans la main de ce joueur. Serveur uniquement.
@@ -111,15 +146,59 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         return carryable != null;
     }
 
+    private void Awake()
+    {
+        controller = GetComponent<CharacterController>();
+    }
+
     public override void OnNetworkSpawn()
     {
         if (!IsOwner) return;
 
-        controller = GetComponent<CharacterController>();
-
         input = new InputSystem_Actions();
         input.Player.Interact.Enable();
         input.Player.Attack.Enable();
+    }
+
+    /// <summary>
+    /// Met un chariot dans les mains de ce joueur, ou l'en retire. Serveur uniquement :
+    /// appele par <see cref="Cart"/> apres validation.
+    /// </summary>
+    public void ServerSetPushedCart(NetworkObject cart)
+    {
+        if (!IsServer) return;
+
+        pushedCart.Value = cart != null ? new NetworkObjectReference(cart) : default;
+    }
+
+    /// <summary>
+    /// Cet objet est-il le chariot que ce joueur pousse ? Sert au PlayerController a ne pas
+    /// bousculer son propre chariot : il le bloque physiquement, mais ne lui envoie pas de
+    /// poussee par-dessus sa conduite.
+    /// </summary>
+    /// <summary>
+    /// Limite de rotation imposee par le chariot pousse, s'il y en a un. Le PlayerController
+    /// s'en sert pour brider le regard : c'est le chariot qui decide de combien on peut
+    /// s'ecarter de son axe.
+    /// </summary>
+    public bool TryGetYawConstraint(out float cartYaw, out float maxOffset)
+    {
+        cartYaw = 0f;
+        maxOffset = 0f;
+
+        if (!TryGetCart(out var cart)) return false;
+
+        cartYaw = cart.Yaw;
+        maxOffset = cart.MaxYawOffset;
+
+        return true;
+    }
+
+    public bool IsPushing(NetworkObject candidate)
+    {
+        return candidate != null
+               && TryGetCart(out var cart)
+               && cart.NetworkObject == candidate;
     }
 
     public override void OnNetworkDespawn()
@@ -127,11 +206,19 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         ReleaseInput();
         holdTarget = null;
 
-        // Un joueur qui se deconnecte ne doit pas emporter la valise dans le vide, ni rester
-        // inscrit sur le generateur qu'il etait en train de reparer.
+        // Un joueur qui se deconnecte ne doit rien emporter dans le vide : ni la valise, ni
+        // le generateur qu'il reparait, ni le chariot qu'il poussait.
         if (!IsServer) return;
 
         ServerEndHold();
+
+        // Resolution directe et non via TryGetCart : celui-ci exige IsSpawned, qui n'est
+        // deja plus fiable pendant un despawn.
+        if (pushedCart.Value.TryGet(out var cartObject) && cartObject != null
+            && cartObject.TryGetComponent<Cart>(out var cart))
+        {
+            cart.ServerRelease(this);
+        }
 
         if (TryGetHeld(out var carried))
             carried.ServerDetach(transform);
@@ -176,6 +263,14 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         }
 
         if (!input.Player.Interact.WasPressedThisFrame()) return;
+
+        // Aux poignees, E sert a lacher. Rien d'autre n'est possible : les deux mains sont
+        // prises, donc HasFreeHand est deja faux partout ailleurs.
+        if (IsPushingCart)
+        {
+            RequestCartReleaseServerRpc();
+            return;
+        }
 
         // Mains pleines : E repose. Mains libres : E declenche l'interaction visee.
         if (heldItem.Value.TryGet(out _))
@@ -386,6 +481,14 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
     private void RequestHoldEndRpc()
     {
         ServerEndHold();
+    }
+
+    [Rpc(SendTo.Server)]
+    private void RequestCartReleaseServerRpc()
+    {
+        // Aucune distance a verifier : on ne fait que lacher ce qu'on tenait deja.
+        if (TryGetCart(out var cart))
+            cart.ServerRelease(this);
     }
 
     /// <summary>Retire ce joueur de l'action qu'il maintenait, quelle qu'en soit la raison.</summary>

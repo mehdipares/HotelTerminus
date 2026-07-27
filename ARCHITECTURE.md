@@ -19,7 +19,8 @@ joueur.** C'est ce qui justifie de modérer le nombre d'objets physiques répliq
 | Type d'objet | Autorité | Pourquoi |
 |---|---|---|
 | Avatar du joueur | **Owner** | chaque joueur pilote son perso, la réactivité prime ; la triche n'est pas un sujet en coop entre amis |
-| Objets du monde (valises, chariots, cadavres) | **Serveur** | une seule simulation possible, sinon deux joueurs voient la valise à deux endroits |
+| Objets du monde (valises, cadavres) | **Serveur** | une seule simulation possible, sinon deux joueurs voient la valise à deux endroits |
+| Chariot | **Owner, transférée au pousseur** | voir ci-dessous |
 
 Cela se traduit dans l'inspecteur par le champ `Authority Mode` du `NetworkTransform` :
 `Owner` sur le prefab Player, `Server` sur les objets.
@@ -49,6 +50,58 @@ fonctionne.
 Une `NetworkObjectReference` se résout chez tout le monde. Elle a un autre avantage : la
 main d'un joueur et un réceptacle (douille, support) deviennent le même cas — les deux
 exposent une ancre, l'objet attaché n'a pas à savoir lequel des deux le tient.
+
+### L'autorité du chariot suit celui qui le pousse
+
+C'est la seule exception à « objets du monde = serveur », et elle est délibérée.
+
+L'avatar du joueur est en autorité **Owner** : il bouge instantanément chez son propriétaire.
+Un chariot simulé sur le serveur répondrait donc un aller-retour réseau plus tard — il traîne
+derrière, tremble dans les virages, et le joueur rentre dans son propre chariot. La latence
+devient le sujet principal du gameplay, ce qui est inacceptable pour un objet qu'on manipule
+en permanence.
+
+Le serveur transfère donc la propriété du `NetworkObject` à celui qui prend les poignées
+(`ChangeOwnership`) et la reprend au relâchement (`RemoveOwnership`). **Personne aux
+poignées = le serveur simule**, exactement la règle habituelle. L'exception est temporaire et
+explicite, jamais un état permanent.
+
+**Conséquence à retenir : celui qui simule le chariot devra aussi simuler ce qui repose
+dessus.** Sans chargement, et avec un chargement calé et cinématique, la question ne se pose
+pas. Elle se posera le jour où les objets devront glisser et tomber du plateau : il faudra
+transférer la propriété du chargement en même temps que celle du chariot.
+
+### Un objet piloté ne se bouscule pas
+
+Le pousseur **entre en collision** avec son chariot — c'est ce qui rend un mur infranchissable
+avec lui, et ça se lit immédiatement. Mais il ne lui envoie **pas** de bousculade
+(`OnControllerColliderHit`) : le chariot est déjà piloté par sa propre conduite, une poussée
+par-dessus le ferait vibrer et enverrait un message réseau par frame de contact.
+
+Neutraliser la collision à la place, comme essayé d'abord, donne un joueur qui traverse son
+propre chariot. Injouable.
+
+### Le chariot confisque le regard
+
+La rotation horizontale du pousseur est bornée à ±30° de l'axe du chariot. Tant que celui-ci
+tourne, le joueur tourne avec. **Bloqué contre un mur, il ne pivote plus — donc le joueur ne
+peut plus tourner la tête.** Il doit lâcher pour regarder ailleurs.
+
+Le chariot ne se contente pas de ralentir : il encombre. C'est ce qui en fait l'outil à
+double tranchant voulu, et non un simple bonus de capacité de transport.
+
+La contrainte **interdit d'aggraver l'écart, elle ne force jamais un retour** : sinon saisir
+les poignées en arrivant de biais recalerait brutalement le regard. Le regard vertical, lui,
+reste libre — lever les yeux ne demande pas de faire pivoter un chariot.
+
+### Un plafond de vitesse se calcule sur la cible, pas sur le joueur
+
+Le chariot était plafonné à la vitesse de marche du pousseur. Erreur : quand le joueur tourne
+sur place, sa vitesse est nulle, alors que le point à atteindre décrit un arc de cercle à
+bonne allure. Le chariot était bridé précisément quand il avait le plus à rattraper.
+
+Le plafond se calcule donc sur le déplacement réel de **la cible**, qui contient à la fois la
+translation et la rotation du joueur.
 
 ### Une référence répliquée peut désigner un objet pas encore arrivé
 
