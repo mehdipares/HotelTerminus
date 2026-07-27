@@ -10,4 +10,13 @@ using UnityEngine;
 public interface ICarryAnchor
 {
     Transform Anchor { get; }
+
+    /// <summary>
+    /// Ancre reservee a un objet precis. Une main ou une douille n'en ont qu'une et
+    /// renvoient toujours la meme ; un plateau de chariot en a une par emplacement.
+    ///
+    /// Implementation par defaut : tout ce qui n'accueille qu'un objet n'a rien a ecrire.
+    /// Meme procede que CanUse sur IInteractable.
+    /// </summary>
+    Transform AnchorFor(Carryable item) => Anchor;
 }

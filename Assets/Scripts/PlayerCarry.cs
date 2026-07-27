@@ -61,6 +61,8 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
     // se deconnecte en pleine reparation.
     private IInteractable serverHoldTarget;
 
+    private Cart ghostCart;                      // chariot dont on affiche le repere de pose
+
     // Ce que porte ce joueur. Ecrit par le serveur, lu par tous : un autre client peut ainsi
     // savoir si ce joueur a les mains prises (utile pour les animations plus tard).
     private readonly NetworkVariable<NetworkObjectReference> heldItem = new(
@@ -229,6 +231,7 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
     {
         ReleaseInput();
         holdTarget = null;
+        RefreshPlacementGhost(null);
 
         pushedCart.OnValueChanged -= OnPushedCartChanged;
         ApplyCartCollision(pushedCart.Value, default);
@@ -366,6 +369,10 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         aimIsHeldInteraction = false;
         aimHoldProgress = 0f;
 
+        // Eteint d'abord : la visee sort de cette methode par plusieurs chemins, et un repere
+        // oublie resterait allume dans notre dos.
+        RefreshPlacementGhost(null);
+
         var origin = aimSource != null ? aimSource : transform;
 
         if (!Physics.Raycast(origin.position, origin.forward, out var hit, reach,
@@ -388,6 +395,28 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         aimCanUse = interactable.CanUse(this);
         aimIsHeldInteraction = interactable.IsHeldInteraction;
         aimHoldProgress = interactable.HoldProgress;
+
+        RefreshPlacementGhost(interactable as Cart);
+    }
+
+    /// <summary>
+    /// Montre le repere de pose sur le chariot vise, tant qu'on tient quelque chose.
+    ///
+    /// Pilote depuis le joueur et non depuis le chariot : lui seul sait ou l'on regarde. Et
+    /// on garde le chariot precedent sous la main pour eteindre son repere des qu'on detourne
+    /// les yeux, sinon il resterait allume derriere nous.
+    /// </summary>
+    private void RefreshPlacementGhost(Cart aimedCart)
+    {
+        var wanted = aimedCart != null && heldItem.Value.TryGet(out _) ? aimedCart : null;
+
+        if (ghostCart != null && ghostCart != wanted)
+            ghostCart.ShowPlacementGhost(false);
+
+        ghostCart = wanted;
+
+        if (ghostCart != null)
+            ghostCart.ShowPlacementGhost(true);
     }
 
     /// <summary>

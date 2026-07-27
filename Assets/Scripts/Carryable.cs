@@ -19,6 +19,12 @@ public class Carryable : NetworkBehaviour, IInteractable
              "Vide = l'origine de l'objet. Sur la valise, c'est la poignee.")]
     [SerializeField] private Transform gripPoint;
 
+    [Tooltip("Point par lequel l'objet se POSE dans un receptacle — plateau de chariot, " +
+             "etagere. Vide = on reutilise le Grip Point.\n\n" +
+             "On tient une valise par sa poignee, mais on la pose sur son flanc : aligner " +
+             "un objet range par son point de prise le laisse debout et a moitie enfonce.")]
+    [SerializeField] private Transform stowPoint;
+
     [Header("Identification")]
     [Tooltip("Associe l'objet a une destination precise (la bonne valise dans la bonne " +
              "chambre). Vide = accepte partout. Pas encore exploite.")]
@@ -57,10 +63,14 @@ public class Carryable : NetworkBehaviour, IInteractable
     private Collider[] colliders;
     private NetworkTransform netTransform;
     private Transform anchor;                    // main ou receptacle, resolu localement
+    private bool stowed;                         // pose dans un receptacle, et non tenu
     private Vector3 baseScale;                   // taille reelle voulue, quelle que soit l'ancre
 
     public string ItemId => itemId;
     public Transform Grip => gripPoint != null ? gripPoint : transform;
+
+    /// <summary>Point de pose. A defaut, on retombe sur le point de prise.</summary>
+    public Transform Stow => stowPoint != null ? stowPoint : Grip;
 
     /// <summary>Vrai des que l'objet est rattache a quelque chose : main ou receptacle.</summary>
     public bool IsAttached => TryGetAttachment(out _);
@@ -116,6 +126,21 @@ public class Carryable : NetworkBehaviour, IInteractable
 
     private void OnAttachmentChanged(NetworkObjectReference previous, NetworkObjectReference current)
         => ApplyAttachment();
+
+    /// <summary>
+    /// Recalcule l'ancre et l'etat local.
+    ///
+    /// Appele par un receptacle a plusieurs places — le plateau d'un chariot — quand
+    /// l'emplacement attribue change. L'attachement et l'emplacement voyagent dans deux
+    /// messages distincts : sans ce rappel, un bagage arrive avant sa place resterait colle
+    /// a la premiere du plateau.
+    /// </summary>
+    public void RefreshAttachment()
+    {
+        if (!IsSpawned) return;
+
+        ApplyAttachment();
+    }
 
     // ---------- Interaction ----------
 
@@ -210,6 +235,10 @@ public class Carryable : NetworkBehaviour, IInteractable
         // "libre" d'une ancre introuvable rendrait l'objet physique chez lui seul.
         var attached = IsAttached;
 
+        // Retenu ici plutot que teste a chaque frame dans SnapToAnchor : savoir si l'on est
+        // dans une main ou dans un receptacle demande de resoudre une reference reseau.
+        stowed = attached && !IsHeld;
+
         anchor = attached ? ResolveAnchor() : null;
 
         // Colliders coupes : un objet tenu ne doit pas percuter son porteur, et un objet
@@ -260,14 +289,13 @@ public class Carryable : NetworkBehaviour, IInteractable
     /// </summary>
     private Transform ResolveAnchor()
     {
-        return TryGetAttachment(out var target) ? AnchorOf(target.gameObject) : null;
-    }
+        if (!TryGetAttachment(out var target)) return null;
 
-    private static Transform AnchorOf(GameObject source)
-    {
-        return source.TryGetComponent<ICarryAnchor>(out var provider) && provider.Anchor != null
-            ? provider.Anchor
-            : source.transform;
+        // AnchorFor et non Anchor : un receptacle a plusieurs places — le plateau d'un
+        // chariot — doit pouvoir repondre celle qui nous est reservee.
+        if (!target.TryGetComponent<ICarryAnchor>(out var provider)) return target.transform;
+
+        return provider.AnchorFor(this) != null ? provider.AnchorFor(this) : target.transform;
     }
 
     private void LateUpdate()
@@ -296,12 +324,15 @@ public class Carryable : NetworkBehaviour, IInteractable
     /// </summary>
     private void SnapToAnchor()
     {
-        var grip = Grip;
+        // Tenu, on s'aligne par la poignee ; pose, par le point de pose. Une valise ne se
+        // range pas comme elle se porte.
+        var reference = stowed ? Stow : Grip;
 
-        // Rotation d'abord : elle deplace le grip, donc la position se calcule apres.
-        var gripLocalRotation = Quaternion.Inverse(transform.rotation) * grip.rotation;
-        transform.rotation = anchor.rotation * Quaternion.Inverse(gripLocalRotation);
+        // Rotation d'abord : elle deplace le point de reference, donc la position se calcule
+        // apres.
+        var localRotation = Quaternion.Inverse(transform.rotation) * reference.rotation;
+        transform.rotation = anchor.rotation * Quaternion.Inverse(localRotation);
 
-        transform.position += anchor.position - grip.position;
+        transform.position += anchor.position - reference.position;
     }
 }

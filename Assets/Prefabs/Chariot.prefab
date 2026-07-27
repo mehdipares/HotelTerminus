@@ -754,6 +754,37 @@ Transform:
   m_Children: []
   m_Father: {fileID: 4526394007312195477}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &479697415998962351
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1159144134703925372}
+  m_Layer: 0
+  m_Name: LoadOrigin
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1159144134703925372
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 479697415998962351}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0.042, y: 0.035, z: -0.662}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 4526394007312195477}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &919132149155446097
 GameObject:
   m_ObjectHideFlags: 0
@@ -1011,6 +1042,7 @@ Transform:
   - {fileID: 2628698666035422898}
   - {fileID: 1196791407784012614}
   - {fileID: 2482791727041557272}
+  - {fileID: 1159144134703925372}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!65 &6541769631038582659
@@ -1186,11 +1218,20 @@ MonoBehaviour:
   ShowTopMostFoldoutHeaderGroup: 1
   operatorAnchor: {fileID: 2628698666035422898}
   rearAxle: {fileID: 1196791407784012614}
-  forwardSpeed: 2.6
-  reverseSpeed: 1.1
-  acceleration: 7
-  steerRate: 85
-  steerAtRest: 0.18
+  loadOrigin: {fileID: 1159144134703925372}
+  columns: 3
+  levels: 3
+  columnSpacing: 0.62
+  levelHeight: 0.45
+  ghostSize: {x: 0.5, y: 0.4, z: 0.55}
+  ghostMaterial: {fileID: 0}
+  pushWalkSpeed: 4.2
+  pushSprintSpeed: 6.2
+  pushReverseSpeed: 1.8
+  pushAcceleration: 9
+  pushDeceleration: 6
+  turnSpeed: 110
+  pivotSpeed: 65
   minPushSpeed: 0.6
   pushForce: 4.5
   pushCooldown: 0.2
