@@ -26,6 +26,7 @@ using UnityEngine;
 /// </summary>
 [RequireComponent(typeof(NetworkObject))]
 [RequireComponent(typeof(Rigidbody))]
+[RequireComponent(typeof(CartPlacementGhost))]
 public class Cart : NetworkBehaviour, IInteractable, ICarryAnchor
 {
     [Header("Reperes")]
@@ -58,13 +59,6 @@ public class Cart : NetworkBehaviour, IInteractable, ICarryAnchor
 
     [Tooltip("Hauteur d'un etage.")]
     [SerializeField] private float levelHeight = 0.45f;
-
-    [Tooltip("Taille du repere orange. Purement visuel : une place accueille un bagage quelle " +
-             "que soit sa taille reelle.")]
-    [SerializeField] private Vector3 ghostSize = new(0.5f, 0.4f, 0.55f);
-
-    [Tooltip("Facultatif. Laisse vide et le repere se fabrique tout seul au lancement.")]
-    [SerializeField] private Material ghostMaterial;
 
     [Header("Vitesses")]
     [Tooltip("Allure normale, chariot pousse.")]
@@ -167,7 +161,7 @@ public class Cart : NetworkBehaviour, IInteractable, ICarryAnchor
     private float nextSpillTime;
 
     private Transform[] slots;                   // ancres de chargement, fabriquees au lancement
-    private GameObject ghost;                    // repere de pose, purement local
+    private CartPlacementGhost ghost;            // repere de pose, purement local
 
     public float BobDamping => bobDamping;
 
@@ -190,6 +184,11 @@ public class Cart : NetworkBehaviour, IInteractable, ICarryAnchor
         // DeliveryZone : le chariot ne bascule pas. Une case oubliee laisserait un chariot
         // couche sur le flanc dont le joueur ne peut plus rien faire.
         body.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
+
+        // Ajoute d'office s'il manque : le repere n'a aucun reglage indispensable, autant ne
+        // pas dependre d'une case a cocher dans le prefab.
+        ghost = GetComponent<CartPlacementGhost>();
+        if (ghost == null) ghost = gameObject.AddComponent<CartPlacementGhost>();
 
         BuildSlots();
     }
@@ -431,87 +430,25 @@ public class Cart : NetworkBehaviour, IInteractable, ICarryAnchor
     // ---------- Repere de pose ----------
 
     /// <summary>
-    /// Montre ou masque le cube orange qui annonce ou le bagage va se poser.
+    /// Montre ou masque le repere de pose.
     ///
-    /// Purement local : aucune replication, aucun cout reseau. C'est un repere d'interface,
-    /// chaque joueur voit le sien, et il n'a aucune existence pour les autres.
+    /// Le chariot ne decide que d'**une** chose ici : quelle place est libre. L'apparence du
+    /// repere appartient a <see cref="CartPlacementGhost"/> — le meme decoupage que
+    /// Bulb / BulbVisual.
     /// </summary>
     public void ShowPlacementGhost(bool visible)
     {
+        if (ghost == null) return;
+
         var index = visible ? FirstFreeSlot() : -1;
 
         if (index < 0 || slots == null || index >= slots.Length)
         {
-            if (ghost != null) ghost.SetActive(false);
+            ghost.Hide();
             return;
         }
 
-        EnsureGhost();
-        if (ghost == null) return;
-
-        ghost.transform.SetParent(slots[index], false);
-        ghost.transform.localPosition = Vector3.zero;
-        ghost.transform.localRotation = Quaternion.identity;
-        ghost.transform.localScale = ghostSize;
-
-        ghost.SetActive(true);
-    }
-
-    private void EnsureGhost()
-    {
-        if (ghost != null) return;
-
-        ghost = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        ghost.name = "Repere_de_pose";
-
-        // Un repere ne doit rien percuter, surtout pas le chariot qui le porte.
-        Destroy(ghost.GetComponent<Collider>());
-
-        var renderer = ghost.GetComponent<MeshRenderer>();
-        renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        renderer.receiveShadows = false;
-
-        var material = ghostMaterial != null ? ghostMaterial : BuildGhostMaterial();
-
-        if (material == null)
-        {
-            // Aucun shader utilisable : on renonce au repere plutot que d'afficher un cube
-            // rose au milieu de l'ecran.
-            Debug.LogWarning("[Chariot] Pas de materiau pour le repere de pose. " +
-                             "Assigne-en un dans le champ Ghost Material.");
-            Destroy(ghost);
-            ghost = null;
-            return;
-        }
-
-        renderer.sharedMaterial = material;
-        ghost.SetActive(false);
-    }
-
-    /// <summary>
-    /// Fabrique un materiau orange translucide, pour n'avoir aucun asset a preparer a la
-    /// main. Si le shader est introuvable dans un build, le champ Ghost Material prend le
-    /// relais.
-    /// </summary>
-    private static Material BuildGhostMaterial()
-    {
-        var shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Sprites/Default");
-        if (shader == null) return null;
-
-        var material = new Material(shader);
-
-        material.SetFloat("_Surface", 1f);                 // transparent
-        material.SetFloat("_ZWrite", 0f);
-        material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
-        material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-        material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
-        material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
-
-        var orange = new Color(1f, 0.55f, 0.1f, 0.35f);
-        material.SetColor("_BaseColor", orange);
-        material.color = orange;
-
-        return material;
+        ghost.ShowAt(slots[index]);
     }
 
     // ---------- Conduite ----------
