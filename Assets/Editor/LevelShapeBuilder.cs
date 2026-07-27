@@ -26,6 +26,11 @@ public class LevelShapeBuilder : EditorWindow
     private float rampRise = 1.5f;
     private float rampThickness = 0.3f;
 
+    // Decoche par defaut : il a ete decide qu'un escalier arrete le chariot, et que les
+    // etages se desservent par l'ascenseur. Ne coche cette case que pour un escalier ou l'on
+    // veut deliberement laisser passer les objets physiques.
+    private bool collisionRamp;
+
     [MenuItem("Tools/HotelTerminus/Escaliers et rampes")]
     private static void Open()
     {
@@ -47,11 +52,19 @@ public class LevelShapeBuilder : EditorWindow
             width = EditorGUILayout.FloatField("Largeur", width);
 
             EditorGUILayout.Space();
+            collisionRamp = EditorGUILayout.Toggle("Rampe de collision", collisionRamp);
+
+            var angle = Mathf.Atan2(stepHeight, stepDepth) * Mathf.Rad2Deg;
+
+            EditorGUILayout.Space();
             EditorGUILayout.HelpBox(
                 $"Hauteur totale : {stepCount * stepHeight:0.00} m\n" +
-                $"Longueur : {stepCount * stepDepth:0.00} m\n\n" +
-                "Le joueur ne montera une marche que si elle ne depasse pas le Step Offset " +
-                "de son CharacterController. Au-dela il butera au pied de l'escalier.",
+                $"Longueur : {stepCount * stepDepth:0.00} m\n" +
+                $"Pente equivalente : {angle:0.0}°\n\n" +
+                "Rampe de collision : un plan incline invisible pose sur le nez des marches. " +
+                "Sans lui, aucun objet physique ne peut monter — un Rigidbody bute sur une " +
+                "face verticale, il n'y a aucune composante vers le haut. Le joueur, lui, " +
+                "monte de toute facon tant que la marche ne depasse pas son Step Offset.",
                 MessageType.Info);
         }
         else
@@ -106,6 +119,43 @@ public class LevelShapeBuilder : EditorWindow
             step.transform.localScale = new Vector3(width, height, stepDepth);
             step.transform.localPosition = new Vector3(0f, height * 0.5f, stepDepth * (i + 0.5f));
         }
+
+        if (collisionRamp)
+            BuildStairCollisionRamp(parent);
+    }
+
+    /// <summary>
+    /// Plan incline invisible pose exactement sur le nez des marches.
+    ///
+    /// Sans lui, aucun objet physique ne monte un escalier : la boite d'un Rigidbody bute
+    /// contre une contremarche verticale, dont la normale de contact est horizontale — il n'y
+    /// a rien qui pousse vers le haut. C'est le procede employe par a peu pres tous les jeux.
+    ///
+    /// Contrepartie a assumer : le chariot **glisse** au lieu de cahoter marche apres marche.
+    /// </summary>
+    private void BuildStairCollisionRamp(Transform parent)
+    {
+        var run = stepCount * stepDepth;
+        var rise = stepCount * stepHeight;
+        var slope = Mathf.Sqrt(run * run + rise * rise);
+        var angle = Mathf.Atan2(rise, run) * Mathf.Rad2Deg;
+
+        // Pas de MeshRenderer : uniquement un collider, donc invisible en jeu.
+        var ramp = new GameObject("Rampe_de_collision");
+        ramp.transform.SetParent(parent, false);
+
+        var box = ramp.AddComponent<BoxCollider>();
+        box.size = new Vector3(width, rampThickness, slope);
+
+        ramp.transform.localRotation = Quaternion.Euler(-angle, 0f, 0f);
+
+        // La surface utile joint le pied de l'escalier au nez de chaque marche : elle part
+        // donc d'une profondeur de marche EN AMONT du premier bloc, sinon elle formerait une
+        // lèvre contre laquelle le chariot buterait.
+        var middle = new Vector3(0f, rise * 0.5f, run * 0.5f - stepDepth);
+
+        ramp.transform.localPosition = middle
+                                       - ramp.transform.localRotation * (Vector3.up * (rampThickness * 0.5f));
     }
 
     private void BuildRamp(Transform parent)

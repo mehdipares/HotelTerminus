@@ -103,6 +103,22 @@ bonne allure. Le chariot était bridé précisément quand il avait le plus à r
 Le plafond se calcule donc sur le déplacement réel de **la cible**, qui contient à la fois la
 translation et la rotation du joueur.
 
+### Un escalier arrête le chariot, et c'est voulu
+
+Un collider en boîte ne franchira jamais une marche : la face d'une contremarche est
+verticale, sa normale de contact est horizontale, rien ne pousse vers le haut. Aucune force
+n'y changera quoi que ce soit.
+
+Les contournements existent — rampe de collision invisible sous les marches, roues en sphères,
+assistance de marche scriptée. **Ils ont été écartés volontairement.** Le chariot ne dessert
+pas les étages par l'escalier : c'est le travail de l'ascenseur, qui devient de ce fait
+l'artère vitale de l'hôtel, et dont la panne devient un vrai problème logistique plutôt qu'un
+gag isolé.
+
+L'outil `Tools > HotelTerminus > Escaliers et rampes` sait poser une rampe de collision, mais
+la case est **décochée par défaut**. Ne la cocher que pour un escalier où l'on veut
+délibérément laisser passer les objets physiques.
+
 ### Une référence répliquée peut désigner un objet pas encore arrivé
 
 Chez un client qui rejoint, les objets arrivent en **plusieurs messages**. Une douille et
