@@ -257,7 +257,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Unity.Netcode.Runtime::Unity.Netcode.NetworkObject
-  GlobalObjectIdHash: 0
+  GlobalObjectIdHash: 2728236358
   InScenePlacedSourceGlobalObjectIdHash: 0
   DeferredDespawnTick: 0
   Ownership: 1
@@ -286,8 +286,9 @@ MonoBehaviour:
   ShowTopMostFoldoutHeaderGroup: 1
   bulbAnchor: {fileID: 834290498379276588}
   lamp: {fileID: 2113769680013179317}
+  surgeBurnChance: 0.18
   startBulbPrefab: {fileID: 1332104434660137609, guid: d839c2c886f223542ac8f5ccca6556e0, type: 3}
-  startBulbIsBurnt: 1
+  startBulbIsBurnt: 0
 --- !u!1 &7196972889526192962
 GameObject:
   m_ObjectHideFlags: 0

@@ -50,6 +50,24 @@ Une `NetworkObjectReference` se résout chez tout le monde. Elle a un autre avan
 main d'un joueur et un réceptacle (douille, support) deviennent le même cas — les deux
 exposent une ancre, l'objet attaché n'a pas à savoir lequel des deux le tient.
 
+### Une référence répliquée peut désigner un objet pas encore arrivé
+
+Chez un client qui rejoint, les objets arrivent en **plusieurs messages**. Une douille et
+l'ampoule qu'elle contient ne sont pas synchronisées dans le même paquet : quand la douille
+se réveille et cherche son ampoule, celle-ci n'existe pas encore sur cette machine.
+
+Toute résolution de `NetworkObjectReference` faite **une seule fois** au spawn doit donc
+tolérer un objet en retard, sinon l'état reste faux pour toujours — la référence ne changeant
+plus, `OnValueChanged` ne repasse jamais. La douille réessaie donc quelques frames.
+
+L'hôte ne voit jamais ce bug : il a créé les deux objets lui-même, il n'a aucun décalage.
+C'est le même angle mort que le rechargement de scène — **tout ce qui touche à la
+synchronisation ne se teste qu'en rejoignant, jamais en hébergeant.**
+
+Ce bug était masqué tant que les douilles démarraient avec une ampoule grillée : éteinte pour
+tout le monde, donc invisible. Un état par défaut « rien à afficher » cache les erreurs
+d'affichage, exactement comme un repli « tout va bien » cache les pannes.
+
 ### Le client demande, le serveur décide
 
 Aucune logique locale ne modifie un état visible par les autres. Le schéma est toujours :

@@ -1,3 +1,4 @@
+using System.Collections;
 using Unity.Netcode;
 using UnityEngine;
 
@@ -20,6 +21,12 @@ public class BulbSocket : NetworkBehaviour, ICarryAnchor, IInteractable
     [Tooltip("Lumiere pilotee par la douille. Allumee seulement si une ampoule saine est vissee.")]
     [SerializeField] private Light lamp;
 
+    [Header("Surtension")]
+    [Tooltip("Risque que l'ampoule grille au retour du courant. Reglable par douille : le " +
+             "sous-sol peut etre plus capricieux que le hall.")]
+    [Range(0f, 1f)]
+    [SerializeField] private float surgeBurnChance = 0.18f;
+
     [Header("Contenu au demarrage — provisoire")]
     [Tooltip("Ampoule presente au lancement. Sert a tester le cycle tout de suite ; plus tard " +
              "les douilles demarreront allumees et grilleront en cours de partie.")]
@@ -32,6 +39,7 @@ public class BulbSocket : NetworkBehaviour, ICarryAnchor, IInteractable
         NetworkVariableWritePermission.Server);
 
     private Bulb trackedBulb;                    // ampoule dont on suit l'etat, pour la lumiere
+    private Coroutine resolveRoutine;            // attente de l'ampoule chez un client qui rejoint
 
     /// <summary>Ancre vue par un Carryable : l'emplacement de l'ampoule.</summary>
     public Transform Anchor => bulbAnchor != null ? bulbAnchor : transform;
@@ -161,12 +169,48 @@ public class BulbSocket : NetworkBehaviour, ICarryAnchor, IInteractable
 
         if (trackedBulb != null)
             trackedBulb.BurntChanged += OnBulbBurntChanged;
+        else if (installedBulb.Value.NetworkObjectId != 0)
+            resolveRoutine = StartCoroutine(ResolveWhenSpawned());
 
         RefreshLight();
     }
 
+    /// <summary>
+    /// Attend que l'ampoule referencee existe vraiment sur cette machine.
+    ///
+    /// Un client qui rejoint recoit la douille et son ampoule dans deux messages distincts :
+    /// quand la douille se reveille, la reference pointe un objet qui n'est pas encore la.
+    /// Sans cette attente la lampe restait eteinte **pour toujours** chez ce joueur — la
+    /// reference ne changeant plus jamais, OnValueChanged ne repasse pas.
+    /// </summary>
+    private IEnumerator ResolveWhenSpawned()
+    {
+        for (var attempt = 0; attempt < 120 && IsSpawned; attempt++)
+        {
+            yield return null;
+
+            if (!installedBulb.Value.TryGet(out var netObject) || netObject == null)
+                continue;
+
+            if (!netObject.TryGetComponent(out trackedBulb))
+                break;
+
+            trackedBulb.BurntChanged += OnBulbBurntChanged;
+            RefreshLight();
+            break;
+        }
+
+        resolveRoutine = null;
+    }
+
     private void UnsubscribeTrackedBulb()
     {
+        if (resolveRoutine != null)
+        {
+            StopCoroutine(resolveRoutine);
+            resolveRoutine = null;
+        }
+
         if (trackedBulb == null) return;
 
         trackedBulb.BurntChanged -= OnBulbBurntChanged;
@@ -175,7 +219,35 @@ public class BulbSocket : NetworkBehaviour, ICarryAnchor, IInteractable
 
     private void OnBulbBurntChanged(bool burnt) => RefreshLight();
 
-    private void OnPowerChanged(bool powered) => RefreshLight();
+    private void OnPowerChanged(bool powered)
+    {
+        RefreshLight();
+
+        if (powered)
+            ServerRollSurge();
+    }
+
+    /// <summary>
+    /// Coup de jus au retour du courant : l'ampoule peut lacher.
+    ///
+    /// Le tirage se fait **sur le serveur uniquement**. L'evenement de courant se declenche
+    /// sur toutes les machines : un de lance localement ferait griller des ampoules
+    /// differentes chez chaque joueur, et l'hotel n'aurait plus la meme tete pour deux
+    /// personnes cote a cote. Une seule machine tire, le resultat descend par
+    /// <see cref="Bulb.IsBurnt"/>, deja repliqué.
+    /// </summary>
+    private void ServerRollSurge()
+    {
+        if (!IsServer || surgeBurnChance <= 0f) return;
+
+        // Rien a griller : douille vide, ou ampoule deja morte.
+        if (trackedBulb == null || trackedBulb.IsBurnt) return;
+
+        if (Random.value >= surgeBurnChance) return;
+
+        trackedBulb.ServerSetBurnt(true);
+        Debug.Log($"[Surtension] {name} : ampoule grillee.");
+    }
 
     private void RefreshLight()
     {

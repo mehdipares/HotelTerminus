@@ -11,8 +11,9 @@ using UnityEngine;
 public class TestItemSpawner : MonoBehaviour
 {
     [SerializeField] private GameObject itemPrefab;
-    [Tooltip("Deux exemplaires seront poses : un neuf et un grille, pour comparer les etats.")]
+    [Tooltip("Ampoules de rechange, toutes neuves.")]
     [SerializeField] private GameObject bulbPrefab;
+    [SerializeField] private int spareBulbCount = 3;
     [SerializeField] private float spawnDistance = 2f;
     [SerializeField] private float spawnHeight = 0.5f;
 
@@ -73,13 +74,16 @@ public class TestItemSpawner : MonoBehaviour
 
         SpawnAt(itemPrefab, origin, Vector3.zero);
 
-        // Deux ampoules cote a cote : une neuve a gauche, une grillee a droite, pour
-        // distinguer les deux etats d'un coup d'oeil.
-        SpawnAt(bulbPrefab, origin, origin.right * -0.6f);
+        // Rechanges alignees et centrees devant le joueur. Toutes neuves : les grillees
+        // arrivent maintenant toutes seules, par la surtension au retour du courant.
+        for (var i = 0; i < spareBulbCount; i++)
+        {
+            var lateral = (i - (spareBulbCount - 1) * 0.5f) * 0.5f;
 
-        var burnt = SpawnAt(bulbPrefab, origin, origin.right * 0.6f);
-        if (burnt != null && burnt.TryGetComponent<Bulb>(out var bulb))
-            bulb.ServerSetBurnt(true);
+            // Reculees d'un pas : avec un nombre impair, celle du milieu apparaitrait
+            // sinon a l'interieur de la valise.
+            SpawnAt(bulbPrefab, origin, origin.right * lateral - origin.forward * 0.8f);
+        }
 
         Debug.Log($"[Test] Objets poses devant le client {clientId}.");
     }
