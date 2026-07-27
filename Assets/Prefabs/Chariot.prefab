@@ -1217,6 +1217,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Cart
   ShowTopMostFoldoutHeaderGroup: 1
   operatorAnchor: {fileID: 2628698666035422898}
+  operatorCollider: {fileID: 3455926262492670218}
   rearAxle: {fileID: 1196791407784012614}
   loadOrigin: {fileID: 1159144134703925372}
   columns: 3

@@ -226,6 +226,25 @@ public class Carryable : NetworkBehaviour, IInteractable
         body.angularVelocity = UnityEngine.Random.insideUnitSphere * dropSpin;
     }
 
+    /// <summary>
+    /// Detache l'objet **sur place** et lui donne une vitesse. Serveur uniquement.
+    ///
+    /// Different de <see cref="ServerDetach"/>, qui repositionne l'objet devant celui qui le
+    /// lache : un chargement renverse doit partir d'ou il etait, sinon toute la pile se
+    /// recentrerait au meme endroit avant de tomber.
+    /// </summary>
+    public void ServerSpill(Vector3 velocity)
+    {
+        if (!IsServer) return;
+
+        NetworkObject.TryRemoveParent(true);
+        attachedTo.Value = default;
+
+        // Apres le detachement : l'ecriture ci-dessus a rendu le corps non cinematique.
+        body.linearVelocity = velocity;
+        body.angularVelocity = UnityEngine.Random.insideUnitSphere * dropSpin;
+    }
+
     // ---------- Etat local, deduit du serveur ----------
 
     private void ApplyAttachment()

@@ -37,6 +37,11 @@ public class Cart : NetworkBehaviour, IInteractable, ICarryAnchor
              "Vide = le centre de l'objet, et le chariot tournera comme une toupie.")]
     [SerializeField] private Transform rearAxle;
 
+    [Tooltip("Boite couvrant la place du conducteur. Active pendant la conduite seulement — " +
+             "elle sert a ce que le chariot decide seul de ce qui passe. A l'abandon elle " +
+             "serait un obstacle invisible la ou un joueur vient se placer.")]
+    [SerializeField] private Collider operatorCollider;
+
     [Header("Chargement")]
     [Tooltip("Premiere place du plateau : celle du fond, en bas. Les autres en decoulent. " +
              "Son orientation donne celle des bagages poses.")]
@@ -88,6 +93,23 @@ public class Cart : NetworkBehaviour, IInteractable, ICarryAnchor
              "A l'arret le chariot tourne autour de son centre, comme un caddie dont on fait " +
              "pivoter les roues folles ; en mouvement il braque autour de l'essieu arriere.")]
     [SerializeField] private float pivotSpeed = 65f;
+
+    [Header("Renversement du chargement")]
+    [Tooltip("Vitesse relative d'impact a partir de laquelle des bagages tombent. Volontairement " +
+             "haut : manoeuvrer contre un mur ne doit rien faire tomber, il faut foncer dedans.")]
+    [SerializeField] private float spillImpact = 4.5f;
+
+    [Tooltip("Chaque tranche de vitesse au-dela du seuil fait tomber un bagage de plus. La " +
+             "reaction est donc graduee : un gros choc vide le plateau, un choc limite en " +
+             "fait tomber un seul.")]
+    [SerializeField] private float spillStep = 1.5f;
+
+    [Tooltip("Vitesse donnee aux bagages ejectes.")]
+    [SerializeField] private float spillSpeed = 2.5f;
+
+    [Tooltip("Delai avant qu'un nouveau choc puisse renverser quelque chose. Evite qu'un seul " +
+             "impact, qui produit plusieurs contacts, ne vide le plateau d'un coup.")]
+    [SerializeField] private float spillCooldown = 0.5f;
 
     [Header("Bousculade du decor")]
     [Tooltip("Vitesse minimale pour deranger quelque chose. En dessous on effleure.")]
@@ -142,6 +164,7 @@ public class Cart : NetworkBehaviour, IInteractable, ICarryAnchor
     private bool driveSprint;
     private float currentSpeed;                  // vitesse longitudinale lissee
     private float nextPushTime;
+    private float nextSpillTime;
 
     private Transform[] slots;                   // ancres de chargement, fabriquees au lancement
     private GameObject ghost;                    // repere de pose, purement local
@@ -204,6 +227,9 @@ public class Cart : NetworkBehaviour, IInteractable, ICarryAnchor
     public override void OnNetworkSpawn()
     {
         load.OnListChanged += OnLoadChanged;
+        driver.OnValueChanged += OnDriverChanged;
+
+        ApplyOperatorCollider();
 
         // Une place par emplacement, vide. La liste est repliquee, donc tout le monde range
         // les bagages au meme endroit.
@@ -370,7 +396,36 @@ public class Cart : NetworkBehaviour, IInteractable, ICarryAnchor
     public override void OnNetworkDespawn()
     {
         load.OnListChanged -= OnLoadChanged;
+        driver.OnValueChanged -= OnDriverChanged;
         pushers.Clear();
+    }
+
+    private void OnDriverChanged(NetworkObjectReference previous, NetworkObjectReference current)
+    {
+        ApplyOperatorCollider();
+
+        // Lacher le chariot coupe son elan : sans ca il continue sur sa lancee, le joueur
+        // reste dedans, et le moteur physique les separe brutalement. C'est aussi ce qu'on
+        // attend en jouant — on lache la barre, le chariot s'arrete la.
+        if (IsServer && !HasDriver && body != null && !body.isKinematic)
+        {
+            body.linearVelocity = Vector3.zero;
+            body.angularVelocity = Vector3.zero;
+        }
+    }
+
+    /// <summary>
+    /// La boite qui couvre la place du conducteur n'existe que pendant la conduite : c'est
+    /// elle qui fait decider au chariot seul de ce qui passe.
+    ///
+    /// A l'abandon elle devient un obstacle invisible pile a l'endroit ou un joueur vient se
+    /// placer. Il entre dedans, le moteur physique constate une interpenetration profonde et
+    /// les separe violemment — le chariot part en l'air.
+    /// </summary>
+    private void ApplyOperatorCollider()
+    {
+        if (operatorCollider != null)
+            operatorCollider.enabled = HasDriver;
     }
 
     // ---------- Repere de pose ----------
@@ -600,9 +655,92 @@ public class Cart : NetworkBehaviour, IInteractable, ICarryAnchor
     ///
     /// Les futurs clients PNJ passeront par ce meme chemin, sans rien changer ici.
     /// </summary>
-    private void OnCollisionEnter(Collision collision) => TryPush(collision);
+    private void OnCollisionEnter(Collision collision)
+    {
+        TryPush(collision);
+        TrySpill(collision);
+    }
 
     private void OnCollisionStay(Collision collision) => TryPush(collision);
+
+    /// <summary>
+    /// Un choc assez violent decroche le chargement.
+    ///
+    /// Le conducteur constate le contact — sa machine est la seule a simuler le chariot — et
+    /// demande ; le serveur decide et detache, parce que les bagages, eux, sont a lui.
+    ///
+    /// Le seuil est haut par construction : cogner un mur en manoeuvrant ne doit rien faire
+    /// tomber. Il faut foncer dedans.
+    /// </summary>
+    private void TrySpill(Collision collision)
+    {
+        if (!IsSpawned || !IsOwner) return;
+        if (Time.time < nextSpillTime) return;
+
+        var impact = collision.relativeVelocity.magnitude;
+        if (impact < spillImpact) return;
+
+        nextSpillTime = Time.time + spillCooldown;
+
+        // Le chargement part dans le sens de la marche : c'est l'inertie qui le decroche, pas
+        // le mur qui le repousse. On prend l'axe du chariot plutot que la normale du contact,
+        // qui pointe n'importe ou selon l'endroit exact ou l'on tape.
+        var forward = transform.forward * (currentSpeed < 0f ? -1f : 1f);
+
+        if (IsServer)
+            ServerSpillLoad(impact, forward);
+        else
+            RequestSpillRpc(impact, forward);
+    }
+
+    [Rpc(SendTo.Server)]
+    private void RequestSpillRpc(float impact, Vector3 forward)
+    {
+        ServerSpillLoad(impact, forward);
+    }
+
+    /// <summary>
+    /// Fait tomber le haut de la pile. Reaction graduee : un choc a peine au-dessus du seuil
+    /// ne decroche qu'un bagage, un vrai carambolage vide le plateau.
+    ///
+    /// On vide par le haut, ce qui est aussi ce que fait la physique : c'est le dessus d'une
+    /// pile qui part en premier.
+    /// </summary>
+    private void ServerSpillLoad(float impact, Vector3 forward)
+    {
+        if (!IsServer || impact < spillImpact) return;
+
+        var count = 1 + Mathf.FloorToInt((impact - spillImpact) / Mathf.Max(0.1f, spillStep));
+        var spilled = 0;
+
+        for (var i = 0; i < count; i++)
+        {
+            var index = LastLoadedSlot();
+            if (index < 0) break;                // plateau deja vide
+
+            var id = load[index];
+            load[index] = 0UL;
+
+            if (!NetworkManager.SpawnManager.SpawnedObjects.TryGetValue(id, out var netObject)
+                || netObject == null
+                || !netObject.TryGetComponent<Carryable>(out var carryable))
+            {
+                continue;
+            }
+
+            // Un peu de hasard et une composante verticale : sans ca les bagages partent
+            // tous exactement pareil et l'ensemble a l'air scripte.
+            var velocity = forward * spillSpeed
+                           + Vector3.up * 0.8f
+                           + Random.insideUnitSphere * 0.7f;
+
+            carryable.ServerSpill(velocity);
+            spilled++;
+        }
+
+        if (spilled > 0)
+            Debug.Log($"[Chariot] Choc a {impact:0.0} m/s : {spilled} bagage(s) decroche(s).");
+    }
 
     private void TryPush(Collision collision)
     {
