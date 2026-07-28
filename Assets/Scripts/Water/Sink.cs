@@ -28,7 +28,23 @@ public enum SinkState
 [RequireComponent(typeof(NetworkObject))]
 public class Sink : NetworkBehaviour, IPickupBlocker, IInteractable
 {
+    /// <summary>Quelles fuites exigent la cle en main.</summary>
+    public enum ToolRequirement
+    {
+        None = 0,
+        BigLeakOnly = 1,
+        AllLeaks = 2,
+    }
+
     [Header("Reparation")]
+    [Tooltip("Quelles fuites exigent d'avoir la cle en main.\n\n" +
+             "Grosse seulement : une petite fuite se resserre a la main, une grosse demande " +
+             "l'outil. C'est ce qui hierarchise les deux corvees — la grosse devient vraiment " +
+             "lourde, il faut couper l'eau ET trouver la cle.\n\n" +
+             "Passe a Toutes le jour ou l'inventaire existera : garder sa cle sur soi ne " +
+             "coutera plus une main.")]
+    [SerializeField] private ToolRequirement toolRequirement = ToolRequirement.BigLeakOnly;
+
     [Tooltip("Duree du maintien de E pour reparer une fuite.")]
     [SerializeField] private float repairDuration = 3f;
 
@@ -116,10 +132,31 @@ public class Sink : NetworkBehaviour, IPickupBlocker, IInteractable
     /// </summary>
     public bool CanInteract(PlayerCarry player)
     {
-        if (player == null || !player.HasFreeHand) return false;
-        if (!IsInstalled || !IsLeaking) return false;
+        if (player == null || !IsInstalled || !IsLeaking) return false;
 
-        return state.Value == SinkState.SmallLeak || !WaterManager.HasWater;
+        // Une grosse fuite exige l'eau coupee. Une petite se repare a tout moment.
+        if (state.Value == SinkState.BigLeak && WaterManager.HasWater) return false;
+
+        return HasRequiredTool(player);
+    }
+
+    /// <summary>
+    /// Le joueur tient-il ce qu'il faut ?
+    ///
+    /// Quand l'outil est exige, il doit etre **en main** — on ne demande donc pas des mains
+    /// libres mais l'inverse, ce qui est le contraire de toutes les autres interactions du
+    /// jeu. Sans outil requis, on repare a mains nues et il faut donc les avoir libres.
+    /// </summary>
+    private bool HasRequiredTool(PlayerCarry player)
+    {
+        var needsTool = toolRequirement == ToolRequirement.AllLeaks
+                        || (toolRequirement == ToolRequirement.BigLeakOnly
+                            && state.Value == SinkState.BigLeak);
+
+        if (!needsTool) return player.HasFreeHand;
+
+        return player.TryGetHeld(out var held)
+               && held.GetComponent<RepairTool>() != null;
     }
 
     /// <summary>Vide : tout passe par le maintien.</summary>

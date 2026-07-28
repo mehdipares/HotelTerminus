@@ -355,9 +355,13 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
 
         if (!input.Player.Interact.WasPressedThisFrame()) return false;
 
-        // Mains pleines : E reste la touche pour reposer, on ne repare pas une valise a la main.
-        if (!HasFreeHand) return false;
-
+        // On ne verifie plus les mains libres ici : certaines actions maintenues exigent au
+        // contraire un objet en main, comme reparer une fuite avec la cle. C'est a la cible
+        // de dire ce qu'il lui faut, et CanInteract l'a deja tranche. Celles qui veulent des
+        // mains nues — le generateur, la vanne — le demandent dans leur propre CanInteract.
+        //
+        // Si aucune action maintenue n'est possible, on retombe sur le comportement normal :
+        // E repose ce qu'on tient.
         if (aimObject == null || !aimIsHeldInteraction || !aimCanInteract) return false;
 
         holdTarget = aimObject;
