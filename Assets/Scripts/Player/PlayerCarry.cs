@@ -389,17 +389,15 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
             return;
 
         // GetComponentInParent : on touche presque toujours un morceau du mesh, pas la racine.
-        var interactable = hit.collider.GetComponentInParent<IInteractable>();
-        if (interactable == null) return;
+        var owner = hit.collider.GetComponentInParent<NetworkObject>();
+        if (owner == null) return;
 
-        // L'interface ne se serialise pas : on doit retrouver le NetworkObject porteur pour
-        // pouvoir designer la cible au serveur.
-        if (interactable is not NetworkBehaviour behaviour || behaviour.NetworkObject == null)
-            return;
+        var interactable = Resolve(owner, this);
+        if (interactable == null) return;
 
         // Les deux actions sont evaluees separement : viser une douille vide avec une ampoule
         // en main n'autorise pas E, mais autorise le clic gauche.
-        aimObject = behaviour.NetworkObject;
+        aimObject = owner;
         aimCanInteract = interactable.CanInteract(this);
         aimCanUse = interactable.CanUse(this);
         aimIsHeldInteraction = interactable.IsHeldInteraction;
@@ -426,6 +424,36 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
 
         if (ghostCart != null)
             ghostCart.ShowPlacementGhost(true);
+    }
+
+    /// <summary>
+    /// Choisit l'interaction a proposer parmi celles que porte l'objet.
+    ///
+    /// Un meme objet peut en avoir plusieurs : un evier est a la fois un Carryable qu'on
+    /// decroche et un Sink qu'on repare. Prendre le premier composant venu donnerait un
+    /// resultat arbitraire — et selon l'ordre d'ajout dans le prefab, la reparation serait
+    /// tout simplement inatteignable.
+    ///
+    /// On retient donc **la premiere qui peut reellement agir**. Comme l'etat dont depend
+    /// CanInteract est repliqué, le client et le serveur choisissent la meme.
+    ///
+    /// GetComponents et non GetComponentsInChildren : l'ampoule vissee est un enfant de la
+    /// douille et implemente elle aussi l'interface. On veut la cible visee, pas son contenu.
+    /// </summary>
+    private static IInteractable Resolve(NetworkObject target, PlayerCarry player)
+    {
+        var candidates = target.GetComponents<IInteractable>();
+        if (candidates.Length == 0) return null;
+
+        foreach (var candidate in candidates)
+        {
+            if (candidate.CanInteract(player) || candidate.CanUse(player))
+                return candidate;
+        }
+
+        // Aucune n'est disponible : on renvoie la premiere quand meme, pour que le viseur
+        // sache qu'il y a bien quelque chose la — simplement rien a en faire pour l'instant.
+        return candidates[0];
     }
 
     /// <summary>
@@ -496,10 +524,7 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         if (Vector3.Distance(transform.position, targetObject.transform.position) > serverMaxDistance)
             return;
 
-        // GetComponent et non GetComponentInChildren : l'ampoule vissee est un enfant de la
-        // douille et implemente elle aussi IInteractable. On veut la cible designee, pas ce
-        // qu'elle contient.
-        var interactable = targetObject.GetComponent<IInteractable>();
+        var interactable = Resolve(targetObject, this);
 
         // CanInteract est reevalue ici : entre la demande et son arrivee, un autre joueur a
         // pu prendre l'objet ou vider la douille.
@@ -516,7 +541,7 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         if (Vector3.Distance(transform.position, targetObject.transform.position) > serverMaxDistance)
             return;
 
-        var interactable = targetObject.GetComponent<IInteractable>();
+        var interactable = Resolve(targetObject, this);
 
         // Reevalue ici : entre la demande et son arrivee, un autre joueur a pu visser une
         // ampoule dans cette douille.
@@ -533,7 +558,7 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         if (Vector3.Distance(transform.position, targetObject.transform.position) > serverMaxDistance)
             return;
 
-        var interactable = targetObject.GetComponent<IInteractable>();
+        var interactable = Resolve(targetObject, this);
 
         if (interactable == null || !interactable.IsHeldInteraction || !interactable.CanInteract(this))
             return;

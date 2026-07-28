@@ -26,8 +26,19 @@ public enum SinkState
 /// chaque client verrait des eviers differents fuir.
 /// </summary>
 [RequireComponent(typeof(NetworkObject))]
-public class Sink : NetworkBehaviour, IPickupBlocker
+public class Sink : NetworkBehaviour, IPickupBlocker, IInteractable
 {
+    [Header("Reparation")]
+    [Tooltip("Duree du maintien de E pour reparer une fuite.")]
+    [SerializeField] private float repairDuration = 3f;
+
+    [Tooltip("Vitesse a laquelle la reparation se defait quand on relache, en multiple de la " +
+             "vitesse de progression.")]
+    [SerializeField] private float repairDecay = 2f;
+
+    [Tooltip("Distance au-dela de laquelle le serveur retire un joueur de la reparation.")]
+    [SerializeField] private float repairMaxDistance = 4f;
+
     [Header("Apparition des fuites")]
     [Tooltip("Chances qu'un evier sain se mette a fuir, par minute. Monte-le tres haut pour " +
              "tester sans attendre.")]
@@ -45,9 +56,15 @@ public class Sink : NetworkBehaviour, IPickupBlocker
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server);
 
+    private readonly NetworkVariable<float> repairProgress = new(
+        0f,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+
     private float nextCheck;
     private float smallLeakSince;
     private IInstallable installable;
+    private PlayerCarry repairer;                // serveur uniquement
 
     public SinkState State => state.Value;
 
@@ -68,13 +85,60 @@ public class Sink : NetworkBehaviour, IPickupBlocker
     public bool IsRunning => IsInstalled && IsLeaking && WaterManager.HasWater;
 
     /// <summary>
-    /// Un evier en grosse fuite ne se decroche pas. Sans ce refus, l'emporter serait la
-    /// facon la plus simple d'arreter une inondation, et toute la boucle — couper l'eau,
-    /// remonter reparer — n'aurait plus de raison d'exister.
+    /// Un evier **qui fuit** ne se decroche pas, petite fuite comprise.
     ///
-    /// Une petite fuite, elle, ne bloque rien : ce n'est qu'un goutte-a-goutte.
+    /// Pour la grosse, la raison est de conception : l'emporter serait la facon la plus
+    /// simple d'arreter une inondation, et toute la boucle — couper l'eau, remonter reparer —
+    /// n'aurait plus de raison d'exister.
+    ///
+    /// Pour la petite, la raison est l'ambiguite : l'evier porte deux interactions sur E,
+    /// decrocher et reparer. Si les deux sont disponibles en meme temps, celle qui l'emporte
+    /// depend de l'ordre des composants dans le prefab — un comportement qu'on ne peut ni
+    /// expliquer au joueur ni deviner en lisant le code. Tant qu'il fuit, E repare ; une fois
+    /// sec, E decroche.
     /// </summary>
-    public bool BlocksPickup => IsInstalled && state.Value == SinkState.BigLeak;
+    public bool BlocksPickup => IsInstalled && IsLeaking;
+
+    // ---------- Reparation ----------
+
+    public bool IsHeldInteraction => true;
+
+    public float HoldProgress => repairProgress.Value;
+
+    /// <summary>
+    /// Reparable en maintenant E — mais une grosse fuite exige que **l'eau soit coupee**.
+    ///
+    /// C'est toute la boucle de coordination : le jet gicle, l'interaction est refusee, il
+    /// faut descendre fermer les deux roues, remonter reparer, puis rouvrir. Une petite
+    /// fuite, elle, se repare a tout moment : c'est la corvee legere.
+    ///
+    /// La condition se lit sur la donnee stockee, jamais sur ce qu'on voit couler.
+    /// </summary>
+    public bool CanInteract(PlayerCarry player)
+    {
+        if (player == null || !player.HasFreeHand) return false;
+        if (!IsInstalled || !IsLeaking) return false;
+
+        return state.Value == SinkState.SmallLeak || !WaterManager.HasWater;
+    }
+
+    /// <summary>Vide : tout passe par le maintien.</summary>
+    public void ServerInteract(PlayerCarry player) { }
+
+    public void ServerHoldBegin(PlayerCarry player)
+    {
+        if (!IsServer || player == null || !CanInteract(player)) return;
+
+        repairer = player;
+    }
+
+    public void ServerHoldEnd(PlayerCarry player)
+    {
+        if (!IsServer || player == null) return;
+
+        if (repairer == player)
+            repairer = null;
+    }
 
     /// <summary>
     /// Emis chez tout le monde a chaque changement d'etat, et une fois au spawn avec l'etat
@@ -106,6 +170,7 @@ public class Sink : NetworkBehaviour, IPickupBlocker
     public override void OnNetworkDespawn()
     {
         state.OnValueChanged -= OnStateChanged;
+        repairer = null;
     }
 
     private void OnStateChanged(SinkState previous, SinkState current)
@@ -129,6 +194,8 @@ public class Sink : NetworkBehaviour, IPickupBlocker
     private void Update()
     {
         if (!IsServer || !IsSpawned) return;
+
+        TickRepair();
 
         // Pas raccorde, pas de degradation : un evier stocke dans un placard ne s'abime pas.
         // Le minuteur de la petite fuite repart de la pose, sinon un evier laisse au sol
@@ -158,6 +225,40 @@ public class Sink : NetworkBehaviour, IPickupBlocker
                     ServerSetState(SinkState.BigLeak);
                 break;
         }
+    }
+
+    /// <summary>
+    /// Fait avancer la reparation en cours. Le reparateur est retire s'il s'eloigne, se
+    /// deconnecte, ou si les conditions changent — l'eau qui revient pendant qu'on repare une
+    /// grosse fuite annule tout, et c'est voulu : quelqu'un a rouvert une roue trop tot.
+    /// </summary>
+    private void TickRepair()
+    {
+        if (repairer != null
+            && (!repairer.IsSpawned
+                || !CanInteract(repairer)
+                || Vector3.Distance(repairer.transform.position, transform.position) > repairMaxDistance))
+        {
+            repairer = null;
+        }
+
+        var rate = 1f / Mathf.Max(0.1f, repairDuration);
+
+        var delta = repairer != null
+            ? rate * Time.deltaTime
+            : -rate * repairDecay * Time.deltaTime;
+
+        var next = Mathf.Clamp01(repairProgress.Value + delta);
+
+        if (!Mathf.Approximately(next, repairProgress.Value))
+            repairProgress.Value = next;
+
+        if (next < 1f) return;
+
+        repairProgress.Value = 0f;
+        repairer = null;
+
+        ServerSetState(SinkState.Normal);
     }
 
     private void TryStartLeak()
