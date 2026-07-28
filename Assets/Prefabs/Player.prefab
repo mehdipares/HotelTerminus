@@ -947,6 +947,7 @@ GameObject:
   - component: {fileID: 3474087966875923425}
   - component: {fileID: 7908501100156768006}
   - component: {fileID: 9065565632872478484}
+  - component: {fileID: 1447458365596429655}
   m_Layer: 0
   m_Name: Player
   m_TagString: Untagged
@@ -984,7 +985,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Unity.Netcode.Runtime::Unity.Netcode.NetworkObject
-  GlobalObjectIdHash: 2296273896
+  GlobalObjectIdHash: 1490977263
   InScenePlacedSourceGlobalObjectIdHash: 1490977263
   DeferredDespawnTick: 0
   Ownership: 1
@@ -1179,6 +1180,22 @@ MonoBehaviour:
     serializedVersion: 2
     m_Bits: 4294967295
   serverMaxDistance: 5.5
+--- !u!114 &1447458365596429655
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7934237984524924026}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 62f4e720d802feb4197a0c3fa599afb7, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::FireDebugToggle
+  ShowTopMostFoldoutHeaderGroup: 1
+  enableKey: 1
+  aimSource: {fileID: 1090743691202311499}
+  reach: 6
 --- !u!1 &8410111659300476719
 GameObject:
   m_ObjectHideFlags: 0

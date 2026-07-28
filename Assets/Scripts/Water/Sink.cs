@@ -234,10 +234,14 @@ public class Sink : NetworkBehaviour, IPickupBlocker, IInteractable
 
         TickRepair();
 
-        // Pas raccorde, pas de degradation : un evier stocke dans un placard ne s'abime pas.
-        // Le minuteur de la petite fuite repart de la pose, sinon un evier laisse au sol
-        // reviendrait au mur deja pret a empirer.
-        if (!IsInstalled)
+        // Deux raisons de ne rien laisser se degrader, et le minuteur repart dans les deux
+        // cas — sinon l'evier reviendrait deja pret a empirer :
+        //
+        //   pas raccorde : un evier stocke dans un placard ne s'abime pas ;
+        //   eau coupee   : sans pression, rien ne lache. C'est ce qui rend la coupure sure —
+        //                  on descend fermer les roues pour tout reparer, pas pour voir de
+        //                  nouvelles fuites apparaitre derriere soi.
+        if (!IsInstalled || !WaterManager.HasWater)
         {
             smallLeakSince = Time.time;
             return;
@@ -247,10 +251,10 @@ public class Sink : NetworkBehaviour, IPickupBlocker, IInteractable
 
         nextCheck = Time.time + Mathf.Max(0.5f, checkInterval);
 
-        // La degradation court MEME l'eau coupee. Sans ca, fermer les vannes en permanence
-        // deviendrait la strategie optimale : plus de fuites, plus rien a faire. En laissant
-        // la degradation courir, couper l'eau accumule une dette — on descend reparer une
-        // grosse fuite pendant que trois petites empirent ailleurs.
+        // Conséquence assumee : tant que la satisfaction des clients n'existe pas, laisser
+        // l'eau coupee en permanence supprime le probleme. C'est elle qui donnera son cout a
+        // la coupure — des clients sans eau, mecontents — et non une degradation qui
+        // continuerait pendant qu'on repare.
         switch (state.Value)
         {
             case SinkState.Normal:
