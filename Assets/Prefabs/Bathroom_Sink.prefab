@@ -358,7 +358,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Sink
   ShowTopMostFoldoutHeaderGroup: 1
   leakChancePerMinute: 60
-  worsenAfterSeconds: 120
+  worsenAfterSeconds: 10
   checkInterval: 4
 --- !u!114 &1131983670981094134
 MonoBehaviour:

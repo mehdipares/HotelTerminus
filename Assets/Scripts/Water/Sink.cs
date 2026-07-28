@@ -26,7 +26,7 @@ public enum SinkState
 /// chaque client verrait des eviers differents fuir.
 /// </summary>
 [RequireComponent(typeof(NetworkObject))]
-public class Sink : NetworkBehaviour
+public class Sink : NetworkBehaviour, IPickupBlocker
 {
     [Header("Apparition des fuites")]
     [Tooltip("Chances qu'un evier sain se mette a fuir, par minute. Monte-le tres haut pour " +
@@ -47,16 +47,34 @@ public class Sink : NetworkBehaviour
 
     private float nextCheck;
     private float smallLeakSince;
+    private IInstallable installable;
 
     public SinkState State => state.Value;
 
     public bool IsLeaking => state.Value != SinkState.Normal;
 
     /// <summary>
+    /// En place, donc en service. Un evier qu'on porte ou qui traine par terre n'est pas
+    /// raccorde : il ne se degrade pas et ne coule pas.
+    ///
+    /// Defaut permissif : sans composant d'installation, l'evier est considere en service.
+    /// </summary>
+    public bool IsInstalled => installable == null || installable.IsInstalled;
+
+    /// <summary>
     /// Est-ce que ca coule, la, maintenant ? **Deduit, jamais stocke.** Une fuite dont l'eau
     /// est coupee ne coule pas, mais elle est toujours la.
     /// </summary>
-    public bool IsRunning => IsLeaking && WaterManager.HasWater;
+    public bool IsRunning => IsInstalled && IsLeaking && WaterManager.HasWater;
+
+    /// <summary>
+    /// Un evier en grosse fuite ne se decroche pas. Sans ce refus, l'emporter serait la
+    /// facon la plus simple d'arreter une inondation, et toute la boucle — couper l'eau,
+    /// remonter reparer — n'aurait plus de raison d'exister.
+    ///
+    /// Une petite fuite, elle, ne bloque rien : ce n'est qu'un goutte-a-goutte.
+    /// </summary>
+    public bool BlocksPickup => IsInstalled && state.Value == SinkState.BigLeak;
 
     /// <summary>
     /// Emis chez tout le monde a chaque changement d'etat, et une fois au spawn avec l'etat
@@ -64,6 +82,11 @@ public class Sink : NetworkBehaviour
     /// qui s'abiment apres son arrivee.
     /// </summary>
     public event Action<SinkState> StateChanged;
+
+    private void Awake()
+    {
+        installable = GetComponent<IInstallable>();
+    }
 
     public override void OnNetworkSpawn()
     {
@@ -106,6 +129,16 @@ public class Sink : NetworkBehaviour
     private void Update()
     {
         if (!IsServer || !IsSpawned) return;
+
+        // Pas raccorde, pas de degradation : un evier stocke dans un placard ne s'abime pas.
+        // Le minuteur de la petite fuite repart de la pose, sinon un evier laisse au sol
+        // reviendrait au mur deja pret a empirer.
+        if (!IsInstalled)
+        {
+            smallLeakSince = Time.time;
+            return;
+        }
+
         if (Time.time < nextCheck) return;
 
         nextCheck = Time.time + Mathf.Max(0.5f, checkInterval);

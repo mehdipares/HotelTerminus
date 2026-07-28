@@ -64,6 +64,7 @@ public class Carryable : NetworkBehaviour, IInteractable
     private NetworkTransform netTransform;
     private Transform anchor;                    // main ou receptacle, resolu localement
     private bool stowed;                         // pose dans un receptacle, et non tenu
+    private IPickupBlocker[] blockers;            // ce qui peut refuser le ramassage
     private Vector3 baseScale;                   // taille reelle voulue, quelle que soit l'ancre
 
     public string ItemId => itemId;
@@ -111,6 +112,10 @@ public class Carryable : NetworkBehaviour, IInteractable
         colliders = GetComponentsInChildren<Collider>(true);
         netTransform = GetComponent<NetworkTransform>();
 
+        // Retenus une fois : CanInteract est appele a chaque frame par la visee de chaque
+        // joueur, ce n'est pas l'endroit pour parcourir les composants.
+        blockers = GetComponents<IPickupBlocker>();
+
         // Taille reelle de l'objet, capturee avant tout parentage : elle sert de reference
         // pour ne pas se laisser deformer par l'echelle d'un porteur ou d'un receptacle.
         baseScale = transform.localScale;
@@ -151,10 +156,20 @@ public class Carryable : NetworkBehaviour, IInteractable
 
     // ---------- Interaction ----------
 
-    /// <summary>Ramassable si libre et si le joueur a une main disponible.</summary>
+    /// <summary>
+    /// Ramassable si libre, si le joueur a une main disponible, et si aucun composant voisin
+    /// ne s'y oppose — un evier en grosse fuite refuse d'etre decroche.
+    /// </summary>
     public bool CanInteract(PlayerCarry player)
     {
-        return !IsAttached && player != null && player.HasFreeHand;
+        if (IsAttached || player == null || !player.HasFreeHand) return false;
+
+        foreach (var blocker in blockers)
+        {
+            if (blocker.BlocksPickup) return false;
+        }
+
+        return true;
     }
 
     public void ServerInteract(PlayerCarry player)

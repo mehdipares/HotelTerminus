@@ -14,7 +14,7 @@ using UnityEngine;
 /// repliquees par son NetworkTransform en autorite serveur.
 /// </summary>
 [RequireComponent(typeof(NetworkObject))]
-public class WallPlaceable : NetworkBehaviour
+public class WallPlaceable : NetworkBehaviour, IInstallable
 {
     [Tooltip("Encombrement servant a verifier que l'objet rentre : largeur, hauteur, et " +
              "profondeur depuis le mur. A regler sur le volume reel, sinon la validation ment.")]
@@ -44,6 +44,11 @@ public class WallPlaceable : NetworkBehaviour
     public Vector3 Footprint => footprint;
     public float HeightOffset => heightOffset;
     public bool IsMounted => mounted.Value;
+
+    /// <summary>Accroche au mur = en service. Un evier qu'on porte ne fuit pas.</summary>
+    public bool IsInstalled => IsMounted;
+
+    public event System.Action<bool> InstalledChanged;
 
     /// <summary>
     /// Ou l'objet doit se trouver pour que son point d'accrochage tombe sur
@@ -107,7 +112,11 @@ public class WallPlaceable : NetworkBehaviour
             carryable.AttachmentChanged -= OnAttachmentChanged;
     }
 
-    private void OnMountedChanged(bool previous, bool current) => ApplyMounted();
+    private void OnMountedChanged(bool previous, bool current)
+    {
+        ApplyMounted();
+        InstalledChanged?.Invoke(current);
+    }
 
     /// <summary>
     /// Quelqu'un a repris l'objet en main : il n'est plus accroche. On ne fait que constater —

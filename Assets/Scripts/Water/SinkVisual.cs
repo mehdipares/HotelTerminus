@@ -30,18 +30,25 @@ public class SinkVisual : MonoBehaviour
     [SerializeField] private Color waterColor = new(0.55f, 0.8f, 1f, 0.75f);
 
     private Material material;
+    private IInstallable installable;
     private bool built;
 
     private void Awake()
     {
         if (sink == null) sink = GetComponentInParent<Sink>();
         if (spout == null) spout = transform;
+
+        if (sink != null)
+            installable = sink.GetComponent<IInstallable>();
     }
 
     private void OnEnable()
     {
         if (sink != null)
             sink.StateChanged += OnSinkStateChanged;
+
+        if (installable != null)
+            installable.InstalledChanged += OnInstalledChanged;
 
         WaterManager.WaterChanged += OnWaterChanged;
 
@@ -53,8 +60,13 @@ public class SinkVisual : MonoBehaviour
         if (sink != null)
             sink.StateChanged -= OnSinkStateChanged;
 
+        if (installable != null)
+            installable.InstalledChanged -= OnInstalledChanged;
+
         WaterManager.WaterChanged -= OnWaterChanged;
     }
+
+    private void OnInstalledChanged(bool installed) => Refresh();
 
     private void OnDestroy()
     {
@@ -67,8 +79,9 @@ public class SinkVisual : MonoBehaviour
     private void OnWaterChanged(bool hasWater) => Refresh();
 
     /// <summary>
-    /// Recalcule ce qui coule. Les deux causes possibles — l'evier s'abime, ou l'eau est
-    /// coupee — passent par ici, il n'y a donc qu'un seul endroit qui decide de l'affichage.
+    /// Recalcule ce qui coule. Les trois causes possibles — l'evier s'abime, l'eau est
+    /// coupee, ou l'objet est decroche du mur — passent par ici : un seul endroit decide de
+    /// l'affichage.
     /// </summary>
     private void Refresh()
     {
