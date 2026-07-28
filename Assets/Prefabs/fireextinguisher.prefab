@@ -62,6 +62,37 @@ Transform:
   m_Children: []
   m_Father: {fileID: 1677409230296376085}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &6030314201462179708
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 2408141441678188883}
+  m_Layer: 0
+  m_Name: Nozzle
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &2408141441678188883
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6030314201462179708}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0.07, y: 8.15, z: 1.04}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1677409230296376085}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &6120917414886828051
 GameObject:
   m_ObjectHideFlags: 0
@@ -78,6 +109,7 @@ GameObject:
   - component: {fileID: 1805583286170362574}
   - component: {fileID: 3499295296894378245}
   - component: {fileID: 2572871853123726523}
+  - component: {fileID: 5852419235079199612}
   m_Layer: 0
   m_Name: fireextinguisher
   m_TagString: Untagged
@@ -102,6 +134,7 @@ Transform:
   - {fileID: 5307059681428493255}
   - {fileID: 6507229586071251889}
   - {fileID: 2149605617182434051}
+  - {fileID: 2408141441678188883}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!65 &1730104420399871918
@@ -164,7 +197,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Unity.Netcode.Runtime::Unity.Netcode.NetworkObject
-  GlobalObjectIdHash: 3045070620
+  GlobalObjectIdHash: 1744644217
   InScenePlacedSourceGlobalObjectIdHash: 0
   DeferredDespawnTick: 0
   Ownership: 1
@@ -279,6 +312,22 @@ MonoBehaviour:
   footprint: {x: 5.3431787, y: 13.879645, z: 6.0579367}
   heightOffset: 0
   mountPoint: {fileID: 2149605617182434051}
+--- !u!114 &5852419235079199612
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6120917414886828051}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7ff658fc23d1c864cae3872cdbfc014d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Extinguisher
+  nozzle: {fileID: 2408141441678188883}
+  sprayColor: {r: 1, g: 1, b: 1, a: 0.5}
+  range: 3
+  spread: 14
 --- !u!1 &8991315897672344384
 GameObject:
   m_ObjectHideFlags: 0
@@ -303,13 +352,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 8991315897672344384}
   serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0.014573288, y: 10.198812, z: 0.4364001}
+  m_LocalRotation: {x: -0, y: -0.027218852, z: -0, w: 0.9996295}
+  m_LocalPosition: {x: 0.17, y: 6.79, z: -2.5}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 1677409230296376085}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: -3.119, z: 0}
 --- !u!1001 &5683885285012996914
 PrefabInstance:
   m_ObjectHideFlags: 0

@@ -25,6 +25,7 @@ public class FireplaceVisual : MonoBehaviour
 
     private GameObject instance;
     private ParticleSystem[] systems;
+    private Extinguisher spraying;               // celui qui arrose ce foyer, s'il y en a un
     private bool warned;
 
     private void Awake()
@@ -36,15 +37,44 @@ public class FireplaceVisual : MonoBehaviour
     private void OnEnable()
     {
         if (fireplace != null)
+        {
             fireplace.BurningChanged += OnBurningChanged;
+            fireplace.SprayingChanged += OnSprayingChanged;
+        }
 
         Apply(fireplace != null && fireplace.IsBurning);
+        OnSprayingChanged(fireplace != null ? fireplace.ResolveSpraying() : null);
     }
 
     private void OnDisable()
     {
         if (fireplace != null)
+        {
             fireplace.BurningChanged -= OnBurningChanged;
+            fireplace.SprayingChanged -= OnSprayingChanged;
+        }
+
+        OnSprayingChanged(null);
+    }
+
+    /// <summary>
+    /// Ouvre le jet de l'extincteur en action, et ferme celui qui vient de s'arreter.
+    ///
+    /// C'est le foyer qui pilote, parce que c'est lui qui replique l'information. Chaque
+    /// machine ouvre donc le meme jet : celui qui appuie sur la touche n'est pas le seul a
+    /// le voir.
+    /// </summary>
+    private void OnSprayingChanged(Extinguisher current)
+    {
+        if (spraying == current) return;
+
+        if (spraying != null)
+            spraying.SetSpraying(false);
+
+        spraying = current;
+
+        if (spraying != null)
+            spraying.SetSpraying(true);
     }
 
     private void OnDestroy()
