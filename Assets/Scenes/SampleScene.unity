@@ -1711,10 +1711,6 @@ PrefabInstance:
       value: 3835108262
       objectReference: {fileID: 0}
     - target: {fileID: 7517523263209945265, guid: 6aa2fb6230804d741bf5502ffbd2cea9, type: 3}
-      propertyPath: m_Enabled
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 7517523263209945265, guid: 6aa2fb6230804d741bf5502ffbd2cea9, type: 3}
       propertyPath: m_InScenePlaced
       value: 1
       objectReference: {fileID: 0}

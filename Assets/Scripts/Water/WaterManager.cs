@@ -139,8 +139,16 @@ public class WaterManager : NetworkBehaviour
     }
 
     /// <summary>
-    /// L'eau ne coule que si **toutes** les roues sont ouvertes. Aucune ne decide seule :
-    /// a deux on se partage le travail, seul on les fait l'une apres l'autre.
+    /// Les roues sont montees **en parallele** : l'eau passe tant qu'au moins une reste
+    /// ouverte, et il faut donc les fermer **toutes** pour couper.
+    ///
+    /// Le montage en serie — une seule fermee suffit — serait plus proche d'une vraie
+    /// tuyauterie, mais il annule tout l'interet des deux roues : la manoeuvre redeviendrait
+    /// aussi rapide seul qu'a deux. Ici, a deux on se partage le travail, seul on fait les
+    /// deux l'une apres l'autre.
+    ///
+    /// Sans aucune roue dans la scene, l'eau coule : une scene de test sans plomberie
+    /// continue de fonctionner.
     ///
     /// Serveur uniquement — c'est lui qui detient l'etat, les clients le lisent.
     /// </summary>
@@ -148,15 +156,21 @@ public class WaterManager : NetworkBehaviour
     {
         if (Instance == null || !Instance.IsServer || !Instance.IsSpawned) return;
 
+        var any = false;
+        var known = false;
+
         foreach (var valve in Valves)
         {
-            if (valve != null && !valve.IsOpen)
-            {
-                Instance.hasWater.Value = false;
-                return;
-            }
+            if (valve == null) continue;
+
+            known = true;
+
+            if (!valve.IsOpen) continue;
+
+            any = true;
+            break;
         }
 
-        Instance.hasWater.Value = true;
+        Instance.hasWater.Value = !known || any;
     }
 }

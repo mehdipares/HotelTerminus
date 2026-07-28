@@ -31,6 +31,37 @@ Transform:
   m_Children: []
   m_Father: {fileID: 7623118626256502637}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &2004485619829003670
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 5021069255628190341}
+  m_Layer: 0
+  m_Name: Spout
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &5021069255628190341
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2004485619829003670}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: -0.01, y: 1.418, z: 0.168}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 7623118626256502637}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &5035893713802453653
 GameObject:
   m_ObjectHideFlags: 0
@@ -109,6 +140,8 @@ GameObject:
   - component: {fileID: 254562061505886510}
   - component: {fileID: 5310286874234225718}
   - component: {fileID: 3096406200816904560}
+  - component: {fileID: 7656883069757357323}
+  - component: {fileID: 1131983670981094134}
   m_Layer: 0
   m_Name: Bathroom_Sink
   m_TagString: Untagged
@@ -133,6 +166,7 @@ Transform:
   - {fileID: 6888782381746772969}
   - {fileID: 3662781532373513925}
   - {fileID: 6166225253581085851}
+  - {fileID: 5021069255628190341}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!65 &3317119115275591045
@@ -201,7 +235,7 @@ MonoBehaviour:
   Ownership: 1
   AlwaysReplicateAsRoot: 0
   SynchronizeTransform: 1
-  m_InScenePlaced: 1
+  m_InScenePlaced: 0
   ActiveSceneSynchronization: 0
   SceneMigrationSynchronization: 0
   SpawnWithObservers: 1
@@ -310,6 +344,39 @@ MonoBehaviour:
   footprint: {x: 1.3894993, y: 1.4468302, z: 0.8152638}
   heightOffset: 0
   mountPoint: {fileID: 6166225253581085851}
+--- !u!114 &7656883069757357323
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7238854022073481017}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4bc620cf4bdbf6943a8ada45eee163c5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Sink
+  ShowTopMostFoldoutHeaderGroup: 1
+  leakChancePerMinute: 60
+  worsenAfterSeconds: 120
+  checkInterval: 4
+--- !u!114 &1131983670981094134
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7238854022073481017}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d47da47ceef06bf49b63f63f9628048c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SinkVisual
+  sink: {fileID: 0}
+  spout: {fileID: 5021069255628190341}
+  dripEffect: {fileID: 0}
+  jetEffect: {fileID: 0}
+  waterColor: {r: 0.55, g: 0.8, b: 1, a: 0.75}
 --- !u!1001 &7617058720475392229
 PrefabInstance:
   m_ObjectHideFlags: 0
