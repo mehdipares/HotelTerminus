@@ -174,7 +174,11 @@ public class Cart : NetworkBehaviour, IInteractable, ICarryAnchor
     /// <summary>Vitesse du chariot, lue par le joueur pour son balancement de marche.</summary>
     public Vector3 Velocity => body != null ? body.linearVelocity : Vector3.zero;
 
-    public bool HasDriver => driver.Value.TryGet(out var target) && target != null;
+    // IsSpawned et NetworkManager : TryGet passe par lui pour resoudre sa reference, et il
+    // n'existe deja plus pendant l'arret de la partie — alors que FixedUpdate, lui, tourne
+    // encore. Meme garde-fou que dans Carryable.
+    public bool HasDriver => IsSpawned && NetworkManager != null
+                             && driver.Value.TryGet(out var target) && target != null;
 
     private void Awake()
     {

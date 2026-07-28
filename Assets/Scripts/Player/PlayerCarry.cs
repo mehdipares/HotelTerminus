@@ -86,7 +86,14 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
     public bool IsPushingCart => TryGetCart(out _);
 
     /// <summary>Le joueur peut-il prendre quelque chose ? Une seule main pour l'instant.</summary>
-    public bool HasFreeHand => !heldItem.Value.TryGet(out _) && !IsPushingCart;
+    public bool HasFreeHand => Resolvable && !heldItem.Value.TryGet(out _) && !IsPushingCart;
+
+    /// <summary>
+    /// Les references reseau sont-elles resolvables ? TryGet passe par le NetworkManager, qui
+    /// n'existe plus pendant l'arret de la partie — alors que la visee et l'interface, elles,
+    /// continuent de tourner une frame ou deux.
+    /// </summary>
+    private bool Resolvable => IsSpawned && NetworkManager != null;
 
     /// <summary>
     /// Attenuation du balancement de camera : un joueur appuye sur une barre a la tete plus
@@ -137,6 +144,8 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
     public bool TryGetHeld(out Carryable carryable)
     {
         carryable = null;
+
+        if (!Resolvable) return false;
 
         if (!heldItem.Value.TryGet(out var netObj) || netObj == null)
             return false;
@@ -304,7 +313,7 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         }
 
         // Mains pleines : E repose. Mains libres : E declenche l'interaction visee.
-        if (heldItem.Value.TryGet(out _))
+        if (!HasFreeHand)
         {
             // On transmet notre elan : lachee en pleine course, la valise doit glisser
             // devant nous et non tomber sur place.
@@ -347,7 +356,7 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         if (!input.Player.Interact.WasPressedThisFrame()) return false;
 
         // Mains pleines : E reste la touche pour reposer, on ne repare pas une valise a la main.
-        if (heldItem.Value.TryGet(out _)) return false;
+        if (!HasFreeHand) return false;
 
         if (aimObject == null || !aimIsHeldInteraction || !aimCanInteract) return false;
 
@@ -408,7 +417,7 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
     /// </summary>
     private void RefreshPlacementGhost(Cart aimedCart)
     {
-        var wanted = aimedCart != null && heldItem.Value.TryGet(out _) ? aimedCart : null;
+        var wanted = aimedCart != null && TryGetHeld(out _) ? aimedCart : null;
 
         if (ghostCart != null && ghostCart != wanted)
             ghostCart.ShowPlacementGhost(false);
@@ -431,7 +440,7 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         // reference. C'est le meme garde-fou que dans Carryable.
         if (!IsOwner || !showCrosshair || !IsSpawned || NetworkManager == null) return;
 
-        var onTarget = aimCanInteract || aimCanUse || heldItem.Value.TryGet(out _);
+        var onTarget = aimCanInteract || aimCanUse || TryGetHeld(out _);
         var size = onTarget ? crosshairSize * 1.75f : crosshairSize;
 
         var rect = new Rect(

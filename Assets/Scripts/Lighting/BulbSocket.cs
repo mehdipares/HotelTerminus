@@ -44,7 +44,10 @@ public class BulbSocket : NetworkBehaviour, ICarryAnchor, IInteractable
     /// <summary>Ancre vue par un Carryable : l'emplacement de l'ampoule.</summary>
     public Transform Anchor => bulbAnchor != null ? bulbAnchor : transform;
 
-    public bool HasBulb => installedBulb.Value.TryGet(out var bulb) && bulb != null;
+    // IsSpawned et NetworkManager : TryGet passe par lui, et il n'existe plus pendant l'arret
+    // de la partie alors que la visee continue d'interroger les cibles.
+    public bool HasBulb => IsSpawned && NetworkManager != null
+                           && installedBulb.Value.TryGet(out var bulb) && bulb != null;
 
     public override void OnNetworkSpawn()
     {
