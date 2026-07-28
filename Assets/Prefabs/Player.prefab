@@ -945,6 +945,8 @@ GameObject:
   - component: {fileID: 3146990091027818511}
   - component: {fileID: 3071230561287311677}
   - component: {fileID: 3474087966875923425}
+  - component: {fileID: 7908501100156768006}
+  - component: {fileID: 9065565632872478484}
   m_Layer: 0
   m_Name: Player
   m_TagString: Untagged
@@ -1094,6 +1096,8 @@ MonoBehaviour:
   pitchMin: -80
   pitchMax: 80
   baseFov: 70
+  lookConeAngle: 55
+  headRecenter: 220
   bobFrequency: 9
   bobVertical: 0.05
   bobHorizontal: 0.035
@@ -1110,6 +1114,10 @@ MonoBehaviour:
   diveCameraDip: 0.35
   diveCameraRoll: 14
   divePushForce: 9
+  pushForce: 2.5
+  minPushSpeed: 1.2
+  pushCooldown: 0.15
+  maxPushDistance: 3
 --- !u!114 &3474087966875923425
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1130,6 +1138,47 @@ MonoBehaviour:
   interactMask:
     serializedVersion: 2
     m_Bits: 4294967295
+  maxCarrierSpeed: 8
+  showCrosshair: 1
+  crosshairSize: 4
+  crosshairIdle: {r: 1, g: 1, b: 1, a: 0.5}
+  crosshairOnTarget: {r: 0.4, g: 1, b: 0.5, a: 0.95}
+--- !u!114 &7908501100156768006
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7934237984524924026}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d812c4617a8e4714393363992acc30ad, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::WallPlacementGhost
+  validColor: {r: 0.25, g: 1, b: 0.35, a: 0.4}
+  blockedColor: {r: 1, g: 0.2, b: 0.2, a: 0.4}
+--- !u!114 &9065565632872478484
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7934237984524924026}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7004dc02da1bd0c42817e8692778b6bf, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::WallPlacer
+  ShowTopMostFoldoutHeaderGroup: 1
+  aimSource: {fileID: 1090743691202311499}
+  reach: 3.5
+  wallMask:
+    serializedVersion: 2
+    m_Bits: 8
+  obstacleMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  serverMaxDistance: 5.5
 --- !u!1 &8410111659300476719
 GameObject:
   m_ObjectHideFlags: 0

@@ -154,6 +154,9 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 6865aad374f0e804db87beef7d94cc6e, type: 3}
       insertIndex: -1
       addedObject: {fileID: 230517713525517657}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 6865aad374f0e804db87beef7d94cc6e, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 3736640383122801321}
   m_SourcePrefab: {fileID: 100100000, guid: 6865aad374f0e804db87beef7d94cc6e, type: 3}
 --- !u!1 &1238902148154471294 stripped
 GameObject:
@@ -319,6 +322,21 @@ MonoBehaviour:
   carrierVelocityTransfer: 0.9
   dropSpin: 1.5
   maxDropSpeed: 5.5
+--- !u!114 &3736640383122801321
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1238902148154471294}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6bbc007fe3017be46bd3f8baeb0e13c8, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::WallPlaceable
+  ShowTopMostFoldoutHeaderGroup: 1
+  footprint: {x: 0.7, y: 0.5, z: 0.35}
+  heightOffset: 0
 --- !u!4 &1908020306455783876 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: -8679921383154817045, guid: 6865aad374f0e804db87beef7d94cc6e, type: 3}

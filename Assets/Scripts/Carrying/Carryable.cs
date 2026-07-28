@@ -82,6 +82,13 @@ public class Carryable : NetworkBehaviour, IInteractable
     /// <summary>Pose dans un receptacle (douille, support). Ni libre, ni dans une main.</summary>
     public bool IsSocketed => IsAttached && !IsHeld;
 
+    /// <summary>
+    /// Emis sur toutes les machines quand l'objet change de rattachement. Permet a un
+    /// composant voisin de reagir — un objet accroche au mur doit se decrocher des que
+    /// quelqu'un le reprend en main.
+    /// </summary>
+    public event System.Action AttachmentChanged;
+
     private bool TryGetAttachment(out NetworkObject target)
     {
         target = null;
@@ -237,12 +244,24 @@ public class Carryable : NetworkBehaviour, IInteractable
     {
         if (!IsServer) return;
 
-        NetworkObject.TryRemoveParent(true);
-        attachedTo.Value = default;
+        ServerDetachInPlace();
 
         // Apres le detachement : l'ecriture ci-dessus a rendu le corps non cinematique.
         body.linearVelocity = velocity;
         body.angularVelocity = UnityEngine.Random.insideUnitSphere * dropSpin;
+    }
+
+    /// <summary>
+    /// Detache sans rien d'autre : ni repositionnement, ni vitesse. Serveur uniquement.
+    /// Utilise quand quelque chose d'autre va immediatement decider ou l'objet se trouve —
+    /// un accrochage mural, par exemple.
+    /// </summary>
+    public void ServerDetachInPlace()
+    {
+        if (!IsServer) return;
+
+        NetworkObject.TryRemoveParent(true);
+        attachedTo.Value = default;
     }
 
     // ---------- Etat local, deduit du serveur ----------
@@ -277,6 +296,8 @@ public class Carryable : NetworkBehaviour, IInteractable
 
         if (attached)
             SnapToAnchor();
+
+        AttachmentChanged?.Invoke();
     }
 
     /// <summary>

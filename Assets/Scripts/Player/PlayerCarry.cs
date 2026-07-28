@@ -426,7 +426,10 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
     /// </summary>
     private void OnGUI()
     {
-        if (!IsOwner || !showCrosshair) return;
+        // IsSpawned et NetworkManager : l'interface continue de se dessiner pendant l'arret
+        // de la partie, alors que TryGet a besoin du NetworkManager pour resoudre sa
+        // reference. C'est le meme garde-fou que dans Carryable.
+        if (!IsOwner || !showCrosshair || !IsSpawned || NetworkManager == null) return;
 
         var onTarget = aimCanInteract || aimCanUse || heldItem.Value.TryGet(out _);
         var size = onTarget ? crosshairSize * 1.75f : crosshairSize;
