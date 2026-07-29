@@ -264,9 +264,30 @@ du porteur, la répliquer en plus créerait un conflit.
 
 Il suit donc la rotation du corps (répliquée) mais **pas le regard vertical**.
 
-Deux raisons : le pitch de la caméra n'est pas répliqué, donc un ancrage sous le pivot
-caméra ferait voir l'objet à des hauteurs différentes selon les joueurs ; et visuellement,
-une valise qui monte quand on regarde le plafond est immédiatement fausse.
+La raison qui tient : visuellement, une valise qui monte quand on regarde le plafond est
+immédiatement fausse.
+
+L'autre raison invoquée à l'origine — « le pitch n'est pas répliqué » — **n'est plus vraie**,
+voir ci-dessous. Elle ne change rien à la décision, mais elle ne peut plus servir
+d'argument.
+
+### Le regard vertical est répliqué, et écrit par le propriétaire
+
+Longtemps le pitch de la caméra est resté purement local : rien n'en avait besoin, et
+plusieurs vérifications serveur s'en accommodaient explicitement — le générateur, la vanne et
+l'évier ne contrôlent que la distance d'un joueur, jamais son orientation, parce que le
+serveur ne savait pas où il regardait.
+
+**L'extincteur a changé ça.** Son jet doit partir là où le viseur pointe : le serveur en a
+besoin pour appliquer la poussée, et les autres joueurs pour afficher le jet au bon endroit.
+Le pitch est donc devenu une `NetworkVariable`, envoyée seulement quand elle bouge d'au moins
+un demi-degré.
+
+C'est aussi **la seule NetworkVariable du projet en écriture propriétaire.** La règle
+habituelle — écriture serveur — n'aurait aucun sens ici : le serveur n'a pas d'opinion sur
+l'endroit où un joueur regarde, c'est une donnée d'entrée qui lui appartient, exactement
+comme la position de son avatar qu'il écrit déjà lui-même. La faire transiter par un RPC
+coûterait plus pour le même niveau de confiance.
 
 ### Porté ou posé : ce sont les colliders qui tranchent
 

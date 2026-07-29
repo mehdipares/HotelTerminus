@@ -41,6 +41,19 @@ public class PlayerController : NetworkBehaviour
     [SerializeField] private float pitchMax = 80f;
     [SerializeField] private float baseFov = 70f;
 
+    [Header("Secousse")]
+    [Tooltip("Amplitude de la secousse a pleine intensite, en metres.")]
+    [SerializeField] private float shakeAmplitude = 0.035f;
+
+    [Tooltip("Inclinaison ajoutee par la secousse, en degres.")]
+    [SerializeField] private float shakeTilt = 1.2f;
+
+    [Tooltip("Rapidite du tremblement.")]
+    [SerializeField] private float shakeFrequency = 22f;
+
+    [Tooltip("Vitesse d'etablissement et de retombee de la secousse.")]
+    [SerializeField] private float shakeResponse = 7f;
+
     [Tooltip("Amplitude du mouvement de tete quand le corps est soude a un chariot. Assez " +
              "pour jeter un oeil sur le cote, jamais assez pour voir derriere soi.")]
     [SerializeField] private float lookConeAngle = 55f;
@@ -113,6 +126,34 @@ public class PlayerController : NetworkBehaviour
     private float landingOffset;
 
     private PlayerCarry carry;                           // ce que le joueur manipule
+    private float shake;                                 // intensite lissee de la secousse
+
+    /// <summary>
+    /// Inclinaison du regard, repliquee.
+    ///
+    /// **Ecriture par le proprietaire, et c'est la seule NetworkVariable du projet dans ce
+    /// cas.** La regle habituelle — ecriture serveur — n'a pas de sens ici : le serveur n'a
+    /// aucune opinion sur l'endroit ou un joueur regarde, c'est une donnee d'entree qui lui
+    /// appartient, exactement comme la position de son avatar qu'il ecrit deja lui-meme.
+    /// La faire transiter par un RPC couterait plus pour le meme niveau de confiance.
+    ///
+    /// Elle a longtemps ete inutile — jusqu'a l'extincteur, dont le jet doit partir la ou le
+    /// joueur regarde, chez tout le monde et sur le serveur qui applique la poussee.
+    /// </summary>
+    private readonly NetworkVariable<float> lookPitch = new(
+        0f,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Owner);
+
+    /// <summary>Origine de la visee : les yeux.</summary>
+    public Vector3 AimOrigin => cameraPivot != null ? cameraPivot.position : transform.position + Vector3.up * 1.6f;
+
+    /// <summary>
+    /// Direction du regard, reconstituee du lacet du corps — deja repliqué par le
+    /// NetworkTransform — et de l'inclinaison repliquee ci-dessus.
+    /// </summary>
+    public Vector3 AimDirection =>
+        transform.rotation * Quaternion.Euler(lookPitch.Value, headYaw, 0f) * Vector3.forward;
 
     private bool IsDiving => diveTimer > 0f;
     private bool IsCrouching => crouchBlend > 0.5f;
@@ -261,6 +302,11 @@ public class PlayerController : NetworkBehaviour
 
         // Vertical : uniquement la camera locale, un corps qui bascule serait absurde.
         pitch = Mathf.Clamp(pitch - look.y, pitchMin, pitchMax);
+
+        // Repliquee seulement quand elle bouge assez pour compter : sans ce seuil, on
+        // enverrait une valeur a chaque frame pour des fractions de degre.
+        if (Mathf.Abs(pitch - lookPitch.Value) > 0.5f)
+            lookPitch.Value = pitch;
     }
 
     // ---------- Accroupissement ----------
@@ -476,6 +522,29 @@ public class PlayerController : NetworkBehaviour
     }
 
     /// <summary>
+    /// Souffle ce joueur. Appele **par le serveur**, applique **chez le proprietaire**.
+    ///
+    /// C'est le pendant exact de la bousculade, dans l'autre sens. La-bas le client constate
+    /// un contact que le serveur ne peut pas voir, ici le serveur decide d'une poussee que le
+    /// client est le seul a pouvoir appliquer : une capsule de CharacterController ne subit
+    /// aucune force, seul son proprietaire la deplace.
+    /// </summary>
+    public void ServerPush(Vector3 velocity)
+    {
+        if (!IsServer) return;
+
+        PushOwnerRpc(velocity);
+    }
+
+    [Rpc(SendTo.Owner)]
+    private void PushOwnerRpc(Vector3 velocity)
+    {
+        // Ajoutee a l'elan en cours : on est bouscule, on ne se teleporte pas.
+        horizontalVelocity += new Vector3(velocity.x, 0f, velocity.z);
+        verticalVelocity += Mathf.Max(0f, velocity.y);
+    }
+
+    /// <summary>
     /// La poussee est appliquee par le serveur, sur sa seule simulation physique. C'est ce
     /// qui garantit que le chariot renverse finit au meme endroit pour tout le monde.
     /// </summary>
@@ -546,8 +615,32 @@ public class PlayerController : NetworkBehaviour
                                     + bob
                                     + Vector3.up * (landingOffset - diveCameraDip * diveCurve);
 
+        // La secousse s'etablit et retombe progressivement : un tremblement qui apparait ou
+        // disparait d'un coup se lit comme un bug, pas comme une machine qu'on declenche.
+        var wanted = carry != null ? carry.HeldShake : 0f;
+        shake = Mathf.MoveTowards(shake, wanted, shakeResponse * Time.deltaTime);
+
+        var tremor = Vector3.zero;
+        var tilt = 0f;
+
+        if (shake > 0.001f)
+        {
+            // Perlin plutot que du hasard pur : le bruit est continu, donc ca vibre au lieu
+            // de sauter d'un point a l'autre.
+            var t = Time.time * shakeFrequency;
+
+            tremor = new Vector3(
+                (Mathf.PerlinNoise(t, 0f) - 0.5f) * 2f,
+                (Mathf.PerlinNoise(0f, t) - 0.5f) * 2f,
+                0f) * (shakeAmplitude * shake);
+
+            tilt = (Mathf.PerlinNoise(t, t) - 0.5f) * 2f * shakeTilt * shake;
+        }
+
+        cameraPivot.localPosition += tremor;
+
         // Le roulis n'existe que pendant la roulade : ailleurs il donne juste la nausee.
-        cameraPivot.localRotation = Quaternion.Euler(pitch, headYaw, diveCameraRoll * diveCurve);
+        cameraPivot.localRotation = Quaternion.Euler(pitch, headYaw, diveCameraRoll * diveCurve + tilt);
 
         if (playerCamera == null) return;
 

@@ -84,6 +84,19 @@ public class Carryable : NetworkBehaviour, IInteractable
     public bool IsSocketed => IsAttached && !IsHeld;
 
     /// <summary>
+    /// Le joueur qui tient cet objet, s'il est dans une main. Sert aux outils, qui doivent
+    /// savoir ou leur porteur regarde.
+    /// </summary>
+    public bool TryGetHolder(out PlayerCarry holder)
+    {
+        holder = null;
+
+        return TryGetAttachment(out var target)
+               && target != null
+               && target.TryGetComponent(out holder);
+    }
+
+    /// <summary>
     /// Emis sur toutes les machines quand l'objet change de rattachement. Permet a un
     /// composant voisin de reagir — un objet accroche au mur doit se decrocher des que
     /// quelqu'un le reprend en main.

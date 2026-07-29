@@ -101,6 +101,23 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
     /// </summary>
     public float CameraBobFactor => TryGetCart(out var cart) ? cart.BobDamping : 1f;
 
+    /// <summary>Secousse demandee par l'outil en main, de 0 a 1.</summary>
+    public float HeldShake => TryGetTool(out var tool) ? tool.CameraShake : 0f;
+
+    /// <summary>L'outil en main est-il en pleine action ? On ne le lache pas dans ce cas.</summary>
+    public bool HeldToolBusy => TryGetTool(out var tool) && tool.IsBusy;
+
+    /// <summary>
+    /// Outil continu tenu en main, s'il y en a un. Un objet ordinaire n'en est pas un : la
+    /// valise se pose au clic gauche, l'extincteur s'en sert.
+    /// </summary>
+    private bool TryGetTool(out IHandTool tool)
+    {
+        tool = null;
+
+        return TryGetHeld(out var held) && held.TryGetComponent(out tool);
+    }
+
     /// <summary>
     /// Chariot conduit par ce joueur, s'il y en a un. Le PlayerController s'en sert pour lui
     /// transmettre les commandes et en deduire sa propre position.
@@ -295,11 +312,18 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
 
         // Clic gauche : appliquer ce qu'on tient. Prioritaire sur le reste, sinon visser
         // une ampoule reviendrait a la lacher par terre.
-        if (input.Player.Attack.WasPressedThisFrame() && aimObject != null && aimCanUse)
+        //
+        // Un outil continu — l'extincteur — partage cette touche, et c'est la DISTANCE qui
+        // departage : aimCanUse n'est vrai que sous sa portee de pose, tres courte. Colle a
+        // un chariot on y depose l'extincteur, partout ailleurs on s'en sert.
+        if (input.Player.Attack.WasPressedThisFrame() && aimObject != null && aimCanUse
+            && !HeldToolBusy)
         {
             RequestUseServerRpc(new NetworkObjectReference(aimObject));
             return;
         }
+
+        UpdateHandTool();
 
         if (!input.Player.Interact.WasPressedThisFrame()) return;
 
@@ -311,6 +335,10 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
             RequestCartReleaseServerRpc();
             return;
         }
+
+        // On ne lache pas un extincteur en pleine action : il atterrirait au sol en continuant
+        // d'arroser le plafond.
+        if (HeldToolBusy) return;
 
         // Mains pleines : E repose. Mains libres : E declenche l'interaction visee.
         if (!HasFreeHand)
@@ -324,6 +352,19 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
 
         if (aimObject != null && aimCanInteract)
             RequestInteractServerRpc(new NetworkObjectReference(aimObject));
+    }
+
+    /// <summary>
+    /// Transmet a l'outil en main que le clic gauche est maintenu ou relache.
+    ///
+    /// On ne decide de rien ici : l'outil recoit l'intention et fait suivre au serveur ce qui
+    /// doit etre repliqué. C'est ce qui fait que les autres joueurs voient le jet.
+    /// </summary>
+    private void UpdateHandTool()
+    {
+        if (!TryGetTool(out var tool)) return;
+
+        tool.SetUsing(input.Player.Attack.IsPressed());
     }
 
     /// <summary>
@@ -404,6 +445,13 @@ public class PlayerCarry : NetworkBehaviour, ICarryAnchor
         aimObject = owner;
         aimCanInteract = interactable.CanInteract(this);
         aimCanUse = interactable.CanUse(this);
+
+        // Un outil continu raccourcit la portee de pose : c'est ce qui permet au clic gauche
+        // de servir a deux choses sans les confondre. Sans ca, vouloir arroser a deux metres
+        // d'un chariot y deposerait l'extincteur.
+        if (aimCanUse && TryGetTool(out var tool) && hit.distance > tool.UseReach)
+            aimCanUse = false;
+
         aimIsHeldInteraction = interactable.IsHeldInteraction;
         aimHoldProgress = interactable.HoldProgress;
 

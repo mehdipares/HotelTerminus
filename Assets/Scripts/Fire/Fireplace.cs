@@ -43,13 +43,6 @@ public class Fireplace : NetworkBehaviour, IInteractable
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server);
 
-    // L'extincteur en train d'agir. Repliqué parce que **tout le monde doit voir le jet** :
-    // l'appui d'une touche, lui, n'est repliqué nulle part.
-    private readonly NetworkVariable<NetworkObjectReference> spraying = new(
-        default,
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server);
-
     private PlayerCarry firefighter;             // serveur uniquement
 
     public bool IsBurning => IsSpawned && burning.Value;
@@ -61,46 +54,24 @@ public class Fireplace : NetworkBehaviour, IInteractable
     /// </summary>
     public event Action<bool> BurningChanged;
 
-    /// <summary>
-    /// Emis chez tout le monde quand l'extincteur en action change. Le rendu s'en sert pour
-    /// ouvrir et fermer le jet — chez tous les joueurs, pas seulement celui qui appuie.
-    /// </summary>
-    public event Action<Extinguisher> SprayingChanged;
-
     public override void OnNetworkSpawn()
     {
         burning.OnValueChanged += OnBurningChanged;
-        spraying.OnValueChanged += OnSprayingChanged;
 
         if (IsServer && startBurning)
             burning.Value = true;
 
         BurningChanged?.Invoke(burning.Value);
-        SprayingChanged?.Invoke(ResolveSpraying());
     }
 
     public override void OnNetworkDespawn()
     {
         burning.OnValueChanged -= OnBurningChanged;
-        spraying.OnValueChanged -= OnSprayingChanged;
 
         firefighter = null;
     }
 
     private void OnBurningChanged(bool previous, bool current) => BurningChanged?.Invoke(current);
-
-    private void OnSprayingChanged(NetworkObjectReference previous, NetworkObjectReference current)
-        => SprayingChanged?.Invoke(ResolveSpraying());
-
-    /// <summary>L'extincteur actuellement en action, ou null.</summary>
-    public Extinguisher ResolveSpraying()
-    {
-        if (!IsSpawned || NetworkManager == null) return null;
-
-        return spraying.Value.TryGet(out var target) && target != null
-            ? target.GetComponent<Extinguisher>()
-            : null;
-    }
 
     // ---------- Extinction ----------
 
@@ -125,10 +96,7 @@ public class Fireplace : NetworkBehaviour, IInteractable
     public void ServerHoldBegin(PlayerCarry player)
     {
         if (!IsServer || player == null || !CanInteract(player)) return;
-        if (!player.TryGetHeld(out var held)) return;
-
         firefighter = player;
-        spraying.Value = new NetworkObjectReference(held.NetworkObject);
     }
 
     public void ServerHoldEnd(PlayerCarry player)
@@ -141,7 +109,6 @@ public class Fireplace : NetworkBehaviour, IInteractable
     private void ServerStopSpraying()
     {
         firefighter = null;
-        spraying.Value = default;
     }
 
     private void Update()

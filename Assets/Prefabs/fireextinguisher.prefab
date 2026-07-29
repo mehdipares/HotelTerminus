@@ -203,7 +203,7 @@ MonoBehaviour:
   Ownership: 1
   AlwaysReplicateAsRoot: 0
   SynchronizeTransform: 1
-  m_InScenePlaced: 1
+  m_InScenePlaced: 0
   ActiveSceneSynchronization: 0
   SceneMigrationSynchronization: 0
   SpawnWithObservers: 1
@@ -324,10 +324,17 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7ff658fc23d1c864cae3872cdbfc014d, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Extinguisher
+  ShowTopMostFoldoutHeaderGroup: 1
   nozzle: {fileID: 2408141441678188883}
+  range: 10
+  coneAngle: 26
+  pushAcceleration: 55
+  referenceMass: 10
+  playerPushSpeed: 6
+  useReach: 0.8
+  cameraShake: 0.55
+  density: 1
   sprayColor: {r: 1, g: 1, b: 1, a: 0.5}
-  range: 3
-  spread: 14
 --- !u!1 &8991315897672344384
 GameObject:
   m_ObjectHideFlags: 0
