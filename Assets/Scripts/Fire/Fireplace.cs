@@ -3,166 +3,125 @@ using Unity.Netcode;
 using UnityEngine;
 
 /// <summary>
-/// Un foyer : un endroit qui peut prendre feu.
+/// Un foyer : un endroit qui brule, avec une **intensite** plutot qu'un simple etat allume ou
+/// eteint.
 ///
 /// **Ne porte que l'etat**, jamais le rendu. Les flammes sont deduites par
 /// <see cref="FireplaceVisual"/>, comme la lumiere d'une douille se deduit de l'ampoule et du
 /// courant, et les particules d'un evier de sa fuite et de l'eau.
 ///
-/// Autorite serveur : lui seul allume et eteint. Un client qui mettrait le feu de son cote
-/// verrait une piece bruler que personne d'autre ne voit.
+/// **Il n'est plus interactif.** L'extinction etait un maintien de E abstrait : viser
+/// vaguement le feu et attendre. Elle est desormais **spatiale** — c'est le jet de
+/// l'extincteur qui, en touchant reellement le foyer, lui retire de l'intensite. Viser a cote
+/// n'eteint rien.
 ///
-/// Volontairement minimal. L'extincteur, la propagation et le generateur en surchauffe
-/// passeront tous par <see cref="ServerSetBurning"/> sans avoir a modifier cette classe.
+/// Autorite serveur : lui seul ecrit l'intensite.
 /// </summary>
 [RequireComponent(typeof(NetworkObject))]
-public class Fireplace : NetworkBehaviour, IInteractable
+public class Fireplace : NetworkBehaviour
 {
-    [Tooltip("Ce foyer brule-t-il des le lancement de la partie ? Utile pour tester.")]
+    [Tooltip("Intensite d'un foyer a pleine puissance. L'echelle est arbitraire : c'est elle " +
+             "qui donne son sens a la puissance d'extinction et a la reprise.")]
+    [SerializeField] private float maxIntensity = 100f;
+
+    [Tooltip("Ce foyer brule-t-il a pleine intensite des le lancement ? Utile pour tester.")]
     [SerializeField] private bool startBurning;
 
-    [Header("Extinction")]
-    [Tooltip("Duree du maintien de E, extincteur en main, pour venir a bout du foyer.")]
-    [SerializeField] private float extinguishDuration = 4f;
+    [Header("Reprise")]
+    [Tooltip("Intensite regagnee par seconde quand plus personne n'arrose. Un feu qu'on " +
+             "laisse repart.")]
+    [SerializeField] private float rekindlePerSecond = 6f;
 
-    [Tooltip("Vitesse a laquelle le feu reprend quand on relache, en multiple de la vitesse " +
-             "d'extinction. Superieur a 1 : un feu qu'on laisse repart plus vite qu'on ne " +
-             "l'etouffe.")]
-    [SerializeField] private float rekindleMultiplier = 1.5f;
+    [Tooltip("Delai apres le dernier jet avant que le feu ne reparte. Sans lui, il " +
+             "remonterait entre deux pas de physique et l'extinction n'avancerait jamais.")]
+    [SerializeField] private float rekindleDelay = 1.2f;
 
-    [Tooltip("Distance au-dela de laquelle le serveur retire un joueur de l'extinction.")]
-    [SerializeField] private float extinguishMaxDistance = 5f;
-
-    private readonly NetworkVariable<bool> burning = new(
-        false,
-        NetworkVariableReadPermission.Everyone,
-        NetworkVariableWritePermission.Server);
-
-    private readonly NetworkVariable<float> extinguishProgress = new(
+    private readonly NetworkVariable<float> intensity = new(
         0f,
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server);
 
-    private PlayerCarry firefighter;             // serveur uniquement
+    private float lastSprayed;                   // serveur uniquement
 
-    public bool IsBurning => IsSpawned && burning.Value;
+    public float MaxIntensity => Mathf.Max(1f, maxIntensity);
+
+    public float Intensity => IsSpawned ? intensity.Value : 0f;
+
+    /// <summary>Intensite ramenee entre 0 et 1. C'est elle que lit le rendu.</summary>
+    public float Normalized => Intensity / MaxIntensity;
+
+    public bool IsBurning => Intensity > 0f;
 
     /// <summary>
-    /// Emis chez tout le monde a chaque changement, **et une fois au spawn avec l'etat
-    /// courant**. C'est cette seconde partie qui compte : un joueur qui rejoint doit voir les
+    /// Emis chez tout le monde a chaque changement, **et une fois au spawn avec la valeur
+    /// courante**. C'est cette seconde partie qui compte : un joueur qui rejoint doit voir les
     /// foyers deja en feu, pas seulement ceux qui s'allument apres son arrivee.
     /// </summary>
-    public event Action<bool> BurningChanged;
+    public event Action<float> IntensityChanged;
 
     public override void OnNetworkSpawn()
     {
-        burning.OnValueChanged += OnBurningChanged;
+        intensity.OnValueChanged += OnIntensityChanged;
 
         if (IsServer && startBurning)
-            burning.Value = true;
+            intensity.Value = MaxIntensity;
 
-        BurningChanged?.Invoke(burning.Value);
+        IntensityChanged?.Invoke(Normalized);
     }
 
     public override void OnNetworkDespawn()
     {
-        burning.OnValueChanged -= OnBurningChanged;
-
-        firefighter = null;
+        intensity.OnValueChanged -= OnIntensityChanged;
     }
 
-    private void OnBurningChanged(bool previous, bool current) => BurningChanged?.Invoke(current);
+    private void OnIntensityChanged(float previous, float current)
+        => IntensityChanged?.Invoke(Normalized);
 
-    // ---------- Extinction ----------
-
-    public bool IsHeldInteraction => true;
-
-    public float HoldProgress => extinguishProgress.Value;
+    // ---------- Ecriture, serveur uniquement ----------
 
     /// <summary>
-    /// Extinguible seulement si ca brule et si le joueur a un extincteur **en main** — comme
-    /// la cle pour une grosse fuite. On ne demande donc pas des mains libres mais l'inverse.
+    /// Fixe l'intensite. Serveur uniquement — unique porte d'entree, qu'emprunteront la
+    /// propagation et tout ce qui mettra le feu plus tard.
     /// </summary>
-    public bool CanInteract(PlayerCarry player)
+    public void ServerSetIntensity(float value)
     {
-        if (player == null || !IsBurning) return false;
+        if (!IsServer || !IsSpawned) return;
 
-        return player.TryGetHeld(out var held) && held.GetComponent<Extinguisher>() != null;
+        var clamped = Mathf.Clamp(value, 0f, MaxIntensity);
+        if (Mathf.Approximately(clamped, intensity.Value)) return;
+
+        var wasBurning = intensity.Value > 0f;
+        intensity.Value = clamped;
+
+        if (wasBurning && clamped <= 0f)
+            Debug.Log($"[Feu] {name} : eteint.");
     }
 
-    /// <summary>Vide : tout passe par le maintien.</summary>
-    public void ServerInteract(PlayerCarry player) { }
+    /// <summary>Allume ou eteint completement. Conserve pour la touche de debug.</summary>
+    public void ServerSetBurning(bool value) => ServerSetIntensity(value ? MaxIntensity : 0f);
 
-    public void ServerHoldBegin(PlayerCarry player)
+    /// <summary>
+    /// Le jet touche ce foyer. Appele par <see cref="Extinguisher"/>, cote serveur, a chaque
+    /// pas de physique et avec la meme attenuation que la poussee : au coeur du jet ca eteint
+    /// vite, en bordure a peine.
+    /// </summary>
+    public void ServerExtinguish(float amount)
     {
-        if (!IsServer || player == null || !CanInteract(player)) return;
-        firefighter = player;
-    }
+        if (!IsServer || !IsSpawned || amount <= 0f) return;
 
-    public void ServerHoldEnd(PlayerCarry player)
-    {
-        if (!IsServer || player == null || firefighter != player) return;
-
-        ServerStopSpraying();
-    }
-
-    private void ServerStopSpraying()
-    {
-        firefighter = null;
+        lastSprayed = Time.time;
+        ServerSetIntensity(intensity.Value - amount);
     }
 
     private void Update()
     {
         if (!IsServer || !IsSpawned) return;
+        if (intensity.Value <= 0f || intensity.Value >= MaxIntensity) return;
+        if (Time.time - lastSprayed < rekindleDelay) return;
 
-        // On retire celui qui ne peut plus agir : trop loin, deconnecte, plus d'extincteur en
-        // main, ou feu deja eteint par quelqu'un d'autre.
-        if (firefighter != null
-            && (!firefighter.IsSpawned
-                || !CanInteract(firefighter)
-                || Vector3.Distance(firefighter.transform.position, transform.position) > extinguishMaxDistance))
-        {
-            ServerStopSpraying();
-        }
-
-        if (!burning.Value)
-        {
-            if (extinguishProgress.Value != 0f)
-                extinguishProgress.Value = 0f;
-
-            return;
-        }
-
-        var rate = 1f / Mathf.Max(0.1f, extinguishDuration);
-
-        // Le feu reprend plus vite qu'on ne l'etouffe : lacher a mi-parcours fait perdre plus
-        // que le temps qu'on a mis. Un extincteur, ca se vide d'un coup.
-        var delta = firefighter != null
-            ? rate * Time.deltaTime
-            : -rate * rekindleMultiplier * Time.deltaTime;
-
-        var next = Mathf.Clamp01(extinguishProgress.Value + delta);
-
-        if (!Mathf.Approximately(next, extinguishProgress.Value))
-            extinguishProgress.Value = next;
-
-        if (next < 1f) return;
-
-        extinguishProgress.Value = 0f;
-        ServerStopSpraying();
-        ServerSetBurning(false);
-    }
-
-    /// <summary>
-    /// Allume ou eteint. Serveur uniquement — unique porte d'entree, qu'emprunteront
-    /// l'extincteur, la propagation et tout ce qui mettra le feu plus tard.
-    /// </summary>
-    public void ServerSetBurning(bool value)
-    {
-        if (!IsServer || !IsSpawned || burning.Value == value) return;
-
-        burning.Value = value;
-        Debug.Log($"[Feu] {name} : {(value ? "en feu" : "eteint")}.");
+        // Un feu qu'on laisse repart. C'est ce qui interdit de gratter quelques pourcents
+        // avant d'aller faire autre chose.
+        ServerSetIntensity(intensity.Value + rekindlePerSecond * Time.deltaTime);
     }
 
     /// <summary>
@@ -173,6 +132,6 @@ public class Fireplace : NetworkBehaviour, IInteractable
     [Rpc(SendTo.Server)]
     public void RequestToggleRpc()
     {
-        ServerSetBurning(!burning.Value);
+        ServerSetBurning(!IsBurning);
     }
 }

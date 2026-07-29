@@ -51,6 +51,20 @@ public class Extinguisher : NetworkBehaviour, IHandTool
              "propre machine qui applique la poussee a son deplacement.")]
     [SerializeField] private float playerPushSpeed = 6f;
 
+    [Tooltip("Intensite retiree a un foyer par seconde, au coeur du jet et a bout portant. " +
+             "Decroit comme la poussee : en bordure de cone, ca n'eteint presque rien.")]
+    [SerializeField] private float extinguishPower = 55f;
+
+    [Header("Reserve")]
+    [Tooltip("Duree totale de jet, en secondes. De quoi venir a bout d'environ deux foyers " +
+             "si l'on vise correctement — beaucoup moins si l'on arrose a cote.")]
+    [SerializeField] private float capacitySeconds = 12f;
+
+    [Range(0.05f, 0.5f)]
+    [Tooltip("Part de la reserve sur laquelle la pression retombe. Le jet faiblit avant de " +
+             "s'arreter : c'est ce qui previent le joueur au lieu de le laisser sec d'un coup.")]
+    [SerializeField] private float sputterFraction = 0.2f;
+
     [Tooltip("Distance de pose. Tres courte volontairement : sans ca, vouloir arroser a deux " +
              "metres d'un chariot y deposerait l'extincteur.")]
     [SerializeField] private float useReach = 0.8f;
@@ -69,7 +83,16 @@ public class Extinguisher : NetworkBehaviour, IHandTool
         NetworkVariableReadPermission.Everyone,
         NetworkVariableWritePermission.Server);
 
+    // Reserve restante, en secondes de jet. Repliquee : le jet faiblit visiblement chez tout
+    // le monde quand l'extincteur se vide, pas seulement chez celui qui le tient.
+    private readonly NetworkVariable<float> charge = new(
+        0f,
+        NetworkVariableReadPermission.Everyone,
+        NetworkVariableWritePermission.Server);
+
     private readonly List<ParticleSystem> layers = new();
+    private readonly HashSet<Fireplace> touched = new();
+    private readonly List<float> baseRates = new();
     private Material material;
     private Carryable carryable;
     private Transform sprayRoot;                 // porte les couches, oriente vers la visee
@@ -97,9 +120,23 @@ public class Extinguisher : NetworkBehaviour, IHandTool
 
     public bool IsSpraying => IsSpawned && spraying.Value;
 
+    /// <summary>Reserve restante, de 0 a 1.</summary>
+    public float ChargeRatio => IsSpawned ? Mathf.Clamp01(charge.Value / Mathf.Max(0.1f, capacitySeconds)) : 0f;
+
+    public bool IsEmpty => IsSpawned && charge.Value <= 0f;
+
+    /// <summary>
+    /// Pression du jet, de 0 a 1. Vaut 1 tant qu'il reste de la reserve, puis retombe sur les
+    /// derniers pourcents : le jet faiblit avant de s'arreter, ce qui previent le joueur au
+    /// lieu de le laisser sec sans signe avant-coureur.
+    /// </summary>
+    public float Pressure =>
+        Mathf.Clamp01(charge.Value / Mathf.Max(0.1f, capacitySeconds * sputterFraction));
+
     // ---------- IHandTool ----------
 
-    public bool IsBusy => IsSpraying;
+    // Vide, il n'est plus occupe : on peut le lacher pour aller en chercher un autre.
+    public bool IsBusy => IsSpraying && !IsEmpty;
 
     public float UseReach => useReach;
 
@@ -123,6 +160,9 @@ public class Extinguisher : NetworkBehaviour, IHandTool
         // d'un extincteur pose a l'autre bout de l'hotel.
         if (value && (carryable == null || !carryable.IsHeld)) return;
 
+        // Vide : on peut appuyer autant qu'on veut, il ne se passe rien.
+        if (value && charge.Value <= 0f) return;
+
         spraying.Value = value;
     }
 
@@ -136,6 +176,9 @@ public class Extinguisher : NetworkBehaviour, IHandTool
     public override void OnNetworkSpawn()
     {
         spraying.OnValueChanged += OnSprayingChanged;
+
+        if (IsServer)
+            charge.Value = capacitySeconds;
 
         // Un joueur qui rejoint pendant qu'on arrose doit voir le jet.
         SetSpraying(spraying.Value);
@@ -157,6 +200,11 @@ public class Extinguisher : NetworkBehaviour, IHandTool
         if (sprayRoot != null && spraying.Value && TryGetAim(out _, out var direction))
             sprayRoot.rotation = Quaternion.LookRotation(direction, Vector3.up);
 
+        // Le jet s'essouffle visiblement quand la reserve s'epuise. Repliquee, donc tout le
+        // monde voit l'extincteur du collegue faiblir avant qu'il ne soit sec.
+        if (spraying.Value)
+            ApplyPressure(Pressure);
+
         // Lache ou pose alors qu'il arrosait : on coupe. Le garde-fou de PlayerCarry evite
         // que ca arrive, celui-ci rattrape les chemins qu'on n'aurait pas prevus.
         if (!IsServer || !IsSpawned || !spraying.Value) return;
@@ -172,6 +220,16 @@ public class Extinguisher : NetworkBehaviour, IHandTool
         if (!IsServer || !IsSpawned || !spraying.Value) return;
 
         Blow();
+
+        // La reserve se vide apres avoir souffle, pour que le dernier pas de physique
+        // compte encore.
+        charge.Value = Mathf.Max(0f, charge.Value - Time.fixedDeltaTime);
+
+        if (charge.Value <= 0f)
+        {
+            spraying.Value = false;
+            Debug.Log($"[Extincteur] {name} : vide.");
+        }
     }
 
     /// <summary>
@@ -190,6 +248,15 @@ public class Extinguisher : NetworkBehaviour, IHandTool
         var pushPlayers = Time.time >= nextPlayerPush;
         var pushedSomeone = false;
 
+        // Tout faiblit ensemble quand la reserve s'epuise : la poussee, l'extinction et le
+        // visuel. Un jet qui aurait l'air mourant mais souffleraiat comme au debut mentirait
+        // au joueur.
+        var pressure = Pressure;
+
+        // Un foyer peut presenter plusieurs colliders : sans ce filtre il serait eteint
+        // plusieurs fois par pas de physique, et la puissance dependrait de sa geometrie.
+        touched.Clear();
+
         foreach (var other in Physics.OverlapSphere(origin, range, ~0, QueryTriggerInteraction.Ignore))
         {
             // Ni nous-memes, ni celui qui nous tient : on ne se souffle pas dessus.
@@ -206,6 +273,15 @@ public class Extinguisher : NetworkBehaviour, IHandTool
             var falloff = (1f - distance / range)
                           * Mathf.InverseLerp(cosLimit, 1f, alignment);
 
+            // Le feu s'eteint parce que le jet le touche vraiment, avec la meme attenuation
+            // que la poussee : au coeur ca etouffe vite, en bordure a peine, a cote rien.
+            // C'est toute la difference avec l'ancienne extinction, qui se contentait de
+            // viser vaguement et d'attendre.
+            var fireplace = other.GetComponentInParent<Fireplace>();
+
+            if (fireplace != null && touched.Add(fireplace))
+                fireplace.ServerExtinguish(extinguishPower * falloff * pressure * Time.fixedDeltaTime);
+
             var body = other.attachedRigidbody;
 
             if (body != null && !body.isKinematic)
@@ -214,7 +290,7 @@ public class Extinguisher : NetworkBehaviour, IHandTool
                 // masse de reference l'acceleration diminue, mais elle ne s'annule pas.
                 var weight = Mathf.Clamp01(referenceMass / Mathf.Max(0.1f, body.mass));
 
-                body.AddForce(direction * (pushAcceleration * falloff * weight),
+                body.AddForce(direction * (pushAcceleration * falloff * weight * pressure),
                               ForceMode.Acceleration);
                 continue;
             }
@@ -227,7 +303,7 @@ public class Extinguisher : NetworkBehaviour, IHandTool
             var player = other.GetComponentInParent<PlayerController>();
             if (player == null || player.transform.root == carryable.transform.root) continue;
 
-            player.ServerPush(direction * (playerPushSpeed * falloff));
+            player.ServerPush(direction * (playerPushSpeed * falloff * pressure));
             pushedSomeone = true;
         }
 
@@ -256,6 +332,22 @@ public class Extinguisher : NetworkBehaviour, IHandTool
             // Sans effacer : le nuage deja sorti finit sa course au lieu de disparaitre d'un
             // coup, comme les gouttes d'un evier quand on ferme une vanne.
             layer.Stop(true, ParticleSystemStopBehavior.StopEmitting);
+        }
+    }
+
+    /// <summary>
+    /// Fait retomber le debit des trois couches avec la pression. Le jet s'essouffle au lieu
+    /// de s'arreter net — c'est le seul avertissement que recoit le joueur, et il n'a besoin
+    /// d'aucune interface pour le lire.
+    /// </summary>
+    private void ApplyPressure(float pressure)
+    {
+        for (var i = 0; i < layers.Count; i++)
+        {
+            if (layers[i] == null) continue;
+
+            var emission = layers[i].emission;
+            emission.rateOverTimeMultiplier = baseRates[i] * pressure;
         }
     }
 
@@ -321,8 +413,14 @@ public class Extinguisher : NetworkBehaviour, IHandTool
         main.playOnAwake = false;
         main.maxParticles = 600;
 
+        var configured = rate * Mathf.Max(0f, density);
+
         var emission = effect.emission;
-        emission.rateOverTime = rate * Mathf.Max(0f, density);
+        emission.rateOverTime = configured;
+
+        // Debit d'origine retenu : la pression module a partir de lui, sans quoi chaque
+        // variation ecraserait le reglage de la couche.
+        baseRates.Add(configured);
 
         var shape = effect.shape;
         shape.shapeType = ParticleSystemShapeType.Cone;
