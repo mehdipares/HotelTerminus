@@ -29,8 +29,10 @@ public class FireDebugToggle : NetworkBehaviour
 
         var origin = aimSource != null ? aimSource : transform;
 
+        // Triggers inclus : le collider d'un foyer en est un, pour qu'un feu ne soit pas un
+        // bloc invisible dans lequel on se cogne.
         if (!Physics.Raycast(origin.position, origin.forward, out var hit, reach,
-                             ~0, QueryTriggerInteraction.Ignore))
+                             ~0, QueryTriggerInteraction.Collide))
         {
             return;
         }

@@ -257,7 +257,10 @@ public class Extinguisher : NetworkBehaviour, IHandTool
         // plusieurs fois par pas de physique, et la puissance dependrait de sa geometrie.
         touched.Clear();
 
-        foreach (var other in Physics.OverlapSphere(origin, range, ~0, QueryTriggerInteraction.Ignore))
+        // Les triggers sont inclus : le collider d'un foyer en est un, pour qu'un feu ne soit
+        // pas un bloc invisible dans lequel on se cogne. Ils sont ecartes plus bas de la
+        // poussee — on ne souffle pas sur une zone.
+        foreach (var other in Physics.OverlapSphere(origin, range, ~0, QueryTriggerInteraction.Collide))
         {
             // Ni nous-memes, ni celui qui nous tient : on ne se souffle pas dessus.
             if (other.transform.root == transform.root) continue;
@@ -281,6 +284,9 @@ public class Extinguisher : NetworkBehaviour, IHandTool
 
             if (fireplace != null && touched.Add(fireplace))
                 fireplace.ServerExtinguish(extinguishPower * falloff * pressure * Time.fixedDeltaTime);
+
+            // Une zone ne se pousse pas : seul le solide encaisse le souffle.
+            if (other.isTrigger) continue;
 
             var body = other.attachedRigidbody;
 
